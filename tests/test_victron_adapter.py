@@ -2,7 +2,6 @@
 
 from unittest.mock import AsyncMock, patch
 
-import numpy as np
 import pytest
 
 from akkudoktoreos.adapter.victron import VictronAdapter, VictronAdapterCommonSettings
@@ -19,12 +18,12 @@ def provider(config_eos):
     return VictronAdapter()
 
 
-def _system_registers() -> list[int]:
-    """Return a zeroed 808..851 register block."""
-    return [0] * (851 - 808 + 1)
+def _ac_registers() -> list[int]:
+    """Return a zeroed 808..822 register block."""
+    return [0] * 15
 
 
-def _set(registers: list[int], register: int, value: int) -> None:
+def _set_ac(registers: list[int], register: int, value: int) -> None:
     registers[register - 808] = value & 0xFFFF
 
 
@@ -45,21 +44,27 @@ class TestVictronRegisterDecoding:
         assert VictronAdapter._decode_int16(123) == 123
 
     def test_system_snapshot_combines_ac_and_dc_pv(self, provider):
-        registers = _system_registers()
-        _set(registers, 808, 100)
-        _set(registers, 811, 200)
-        _set(registers, 850, 300)
-        _set(registers, 817, 400)
-        _set(registers, 818, 500)
-        _set(registers, 819, 600)
-        _set(registers, 820, -100)
-        _set(registers, 821, 50)
-        _set(registers, 842, -500)
-        _set(registers, 843, 75)
+        ac = _ac_registers()
+        _set_ac(ac, 808, 100)
+        _set_ac(ac, 811, 200)
+        _set_ac(ac, 817, 400)
+        _set_ac(ac, 818, 500)
+        _set_ac(ac, 819, 600)
+        _set_ac(ac, 820, -100)
+        _set_ac(ac, 821, 50)
+        battery = [(-500) & 0xFFFF, 75]
+        dc_pv = [300]
 
-        with patch.object(provider, "_read_holding_registers", return_value=registers):
+        with patch.object(
+            provider,
+            "_read_holding_registers",
+            side_effect=[ac, battery, dc_pv],
+        ) as read_registers:
             snapshot = provider._read_system_snapshot()
 
+        assert read_registers.call_args_list[0].args == (808, 15)
+        assert read_registers.call_args_list[1].args == (842, 2)
+        assert read_registers.call_args_list[2].args == (850, 1)
         assert snapshot["pv_power_w"] == 600.0
         assert snapshot["load_power_w"] == 1500.0
         assert snapshot["grid_power_w"] == -50.0
@@ -68,11 +73,14 @@ class TestVictronRegisterDecoding:
 
     def test_dc_only_mode(self, provider, config_eos):
         config_eos.adapter.victron.include_ac_coupled_pv = False
-        registers = _system_registers()
-        _set(registers, 808, 900)
-        _set(registers, 850, 350)
+        ac = _ac_registers()
+        _set_ac(ac, 808, 900)
 
-        with patch.object(provider, "_read_holding_registers", return_value=registers):
+        with patch.object(
+            provider,
+            "_read_holding_registers",
+            side_effect=[ac, [0, 0], [350]],
+        ):
             snapshot = provider._read_system_snapshot()
 
         assert snapshot["pv_power_w"] == 350.0
@@ -115,8 +123,3 @@ class TestVictronMeasurementIntegration:
             await provider._store_pv_energy(second, 1000.0)
 
         assert provider._pv_energy_kwh == pytest.approx(10.0)
-
-
-def test_numpy_is_not_required_for_adapter_logic():
-    """Keep this file's numerical assertions explicit and deterministic."""
-    assert np.isfinite(1.0)
