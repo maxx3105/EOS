@@ -185,7 +185,6 @@ class WeatherOpenMeteo(WeatherProvider):
         if start_dt.date() >= now.date():
             # Future data: request native 15-minute forecasts where supported.
             params["forecast_days"] = forecast_days
-            params["forecast_minutely_15"] = forecast_days
             params["minutely_15"] = OPENMETEO_FORECAST_VARIABLES
         else:
             # Historical data - use start_date and end_date
@@ -228,7 +227,7 @@ class WeatherOpenMeteo(WeatherProvider):
             pd.Series: The data series corresponding to the description.
 
         Raises:
-            ValueError: If no key is found for the provided description.
+            ValueError: If no key is found for '{description}'.
         """
         key = WeatherDataRecord.key_from_description(description)
         if key is None:
@@ -250,7 +249,7 @@ class WeatherOpenMeteo(WeatherProvider):
             data (pd.Series): The pandas Series containing the data to update.
 
         Raises:
-            ValueError: If no key is found for the provided description.
+            ValueError: If no key is found for '{description}'.
         """
         key = WeatherDataRecord.key_from_description(description)
         if key is None:
