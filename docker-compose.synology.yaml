@@ -2,13 +2,7 @@
 services:
   eos:
     container_name: eos-victron
-    image: maxx3105/eos-victron:local
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        PYTHON_VERSION: "3.13.15"
-        BUILD_VERSION: "victron-synology"
+    image: ghcr.io/maxx3105/eos-victron:latest
     env_file:
       - synology.env
     environment:
