@@ -126,8 +126,10 @@ EOS_ADAPTER__VICTRON__INCLUDE_AC_COUPLED_PV=true
 EOS_EMS__MODE=PREDICTION
 EOS_EMS__INTERVAL=300
 EOS_WEATHER__WEATHER_PROVIDER=OpenMeteo
-EOS_PVFORECAST__PVFORECAST_PROVIDER=PVForecastPVLib
+EOS_PVFORECAST__PVFORECAST_PROVIDER=PVForecastPVLibVictron
 ```
+
+`PVForecastPVLibVictron` verwendet die normale PVLib-Berechnung, richtet die Istwertkorrektur aber am jeweils letzten abgeschlossenen 15-Minuten-Slot der Cerbo-Messwerte aus. EOS kann weiterhin alle 5 Minuten Daten erfassen; sobald ein neuer 15-Minuten-Slot vollstaendig ist, wird dieser fuer die Korrektur verwendet.
 
 `PREDICTION` ist fuer die erste Installation absichtlich der Standard. EOS liest damit Cerbo-Daten und erstellt Prognosen, ohne eine Speicher-/Verbraucheroptimierung an Victron zu schicken.
 
@@ -205,7 +207,7 @@ Dieser wird automatisch in `measurement.pv_production_emr_keys` eingetragen und 
 
 ## 9. Wie die Prognosekorrektur arbeitet
 
-EOS vergleicht die gemessene PV-Energie der letzten Stunde mit der PVLib-Prognose fuer dasselbe Zeitfenster.
+EOS nimmt den letzten abgeschlossenen 15-Minuten-Slot der Cerbo-Messungen und betrachtet von dort ein 60-Minuten-Fenster rueckwaerts. Die gemessene PV-Energie wird mit der PVLib-Prognose fuer dasselbe Fenster verglichen.
 
 Vereinfacht:
 
