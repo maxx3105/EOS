@@ -65,16 +65,20 @@ docker run -d \
 
 ### Victron Cerbo GX + Synology DS920+
 
-This fork contains a direct, read-only Victron GX Modbus-TCP adapter and a Synology-specific
-Compose setup. It can run the 15-minute Open-Meteo/PVLib forecast and use measured Cerbo GX PV
-production to correct the near-term forecast without requiring Home Assistant, Node-RED or MQTT.
-The `PVForecastPVLibVictron` provider aligns feedback to the latest completed 15-minute slot.
+This fork contains a direct, read-only Victron GX Modbus-TCP adapter. It can run the 15-minute
+Open-Meteo/PVLib forecast and use measured Cerbo GX PV production to correct the near-term
+forecast without requiring Home Assistant, Node-RED or MQTT. The `PVForecastPVLibVictron`
+provider aligns feedback to the latest completed 15-minute slot.
 
-For Synology, the normal installation needs only **one file**: `synology/docker-compose.yml`.
-Container Manager builds EOS automatically from the public `main` branch of this fork; no GitHub
-account, GitHub Actions, GHCR package, `synology.env`, SSH, Git checkout or manual source copy is
-required. Site coordinates, Cerbo GX address and the first PV plane are configured afterwards in
-the browser at EOSdash.
+The intended Synology installation is through **Container Manager → Registry**. Search for:
+
+```text
+maxx3105/eos
+```
+
+Download the `latest` tag, launch the container, map ports `8503` and `8504`, map a persistent NAS
+folder to `/data`, then finish the site, Cerbo GX and first PV-plane configuration in EOSdash at
+`http://NAS-IP:8504`. No Git checkout, Compose file or environment file is required for end users.
 
 See the step-by-step German guide: **[EOS + Victron Cerbo GX auf Synology DS920+](SYNOLOGY_VICTRON.md)**.
 
