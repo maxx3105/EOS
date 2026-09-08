@@ -151,15 +151,27 @@ async function eosRunQuickSetup() {
 """
 
 
-def _field(label: str, input_id: str, value: str, *, input_type: str = "text", help_text: str = "") -> Div:
+def _field(
+    label: str,
+    input_id: str,
+    value: str,
+    *,
+    input_type: str = "text",
+    help_text: str = "",
+    step: str | None = None,
+) -> Div:
+    input_kwargs: dict[str, Any] = {
+        "id": input_id,
+        "value": value,
+        "type": input_type,
+        "cls": "w-full border rounded px-3 py-2",
+    }
+    if input_type == "number":
+        input_kwargs["step"] = step or "any"
+
     return Div(
         Label(label, fr=input_id, cls="font-semibold block mb-1"),
-        Input(
-            id=input_id,
-            value=value,
-            type=input_type,
-            cls="w-full border rounded px-3 py-2",
-        ),
+        Input(**input_kwargs),
         P(help_text, cls="text-xs opacity-70 mt-1") if help_text else None,
         cls="mb-3",
     )
@@ -203,8 +215,8 @@ def QuickSetup() -> Div:
                 _field("Modulneigung [°]", "eos-setup-tilt", "30", input_type="number"),
                 _field("Azimut [°]", "eos-setup-azimuth", "180", input_type="number", help_text="0=Norden, 90=Osten, 180=Süden, 270=Westen"),
                 _field("Modulleistung [Wp]", "eos-setup-module-power", "400", input_type="number", help_text="EOS wählt ein passendes CEC-Modell nach Leistung."),
-                _field("Module pro String", "eos-setup-modules-string", "10", input_type="number"),
-                _field("Strings pro Wechselrichter", "eos-setup-strings", "2", input_type="number"),
+                _field("Module pro String", "eos-setup-modules-string", "10", input_type="number", step="1"),
+                _field("Strings pro Wechselrichter", "eos-setup-strings", "2", input_type="number", step="1"),
                 _field("Wechselrichterleistung [W]", "eos-setup-inverter-power", "8000", input_type="number", help_text="EOS wählt ein passendes CEC-Wechselrichtermodell nach Leistung."),
                 cls="grid grid-cols-1 md:grid-cols-2 gap-4",
             ),
