@@ -2,7 +2,13 @@
 services:
   eos:
     container_name: eos-victron
-    image: ghcr.io/maxx3105/eos-victron:latest
+    image: eos-victron:local
+    build:
+      context: "https://github.com/maxx3105/EOS.git#main"
+      dockerfile: Dockerfile
+      args:
+        PYTHON_VERSION: "3.13.15"
+        BUILD_VERSION: "synology-main"
     environment:
       OPENBLAS_NUM_THREADS: "1"
       OMP_NUM_THREADS: "1"
@@ -13,7 +19,6 @@ services:
       EOS_SERVER__PORT: "8503"
       EOS_SERVER__EOSDASH_HOST: "0.0.0.0"
       EOS_SERVER__EOSDASH_PORT: "8504"
-      # Used only to sign local EOSdash session state. This is not an internet-facing auth token.
       EOS_SERVER__EOSDASH_SESSKEY: "eos-victron-synology-local-session"
     read_only: true
     restart: unless-stopped
