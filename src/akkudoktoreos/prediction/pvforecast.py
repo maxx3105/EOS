@@ -26,13 +26,14 @@ def pvforecast_provider_ids() -> list[str]:
         prediction_eos = get_prediction()
     except Exception:
         # Prediction may not be initialized
-        # Return at least provider used in example
+        # Return at least providers usable during early configuration validation.
         return [
             "PVForecastAkkudoktor",
             "PVForecastForecastSolar",
             "PVForecastHomeAssistant",
             "PVForecastImport",
             "PVForecastPVLib",
+            "PVForecastPVLibVictron",
             "PVForecastPVNode",
             "PVForecastSolcast",
             "PVForecastVrm",
