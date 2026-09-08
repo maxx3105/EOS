@@ -22,79 +22,66 @@ ENV UV_COMPILE_BYTECODE=1 \
 
 WORKDIR /opt/eos
 
-# Build toolchain for the numpy/scipy/pandas/matplotlib stack. python3 is
-# explicit because the Home Assistant base image ships without it.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     gcc g++ gfortran \
     libopenblas-dev liblapack-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Resolve and install dependencies from the lock file first. This layer stays
-# cached as long as pyproject.toml / uv.lock are unchanged.
 COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-install-project
 
-# Project sources and generated version (pyproject reads version from version.txt).
 COPY src/ ./src
 COPY scripts/get_version.py ./scripts/get_version.py
 RUN python scripts/get_version.py > version.txt
 
-# Install the project itself. Editable, because akkudoktoreos.core.version
-# requires the src/akkudoktoreos layout at runtime; the runtime stage copies
-# src/ back in.
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev
 
 
 FROM ${BUILD_FROM:-python:${PYTHON_VERSION}-slim} AS runtime
 
-# Supplied by Home Assistant, docker-compose and CI; "dev" marks an
-# unversioned local build. CI stamps org.opencontainers.image.version via
-# docker/metadata-action, so it is not set here.
 ARG BUILD_VERSION=dev
 
 LABEL \
     io.hass.version="${BUILD_VERSION}" \
     io.hass.type="addon" \
     io.hass.arch="aarch64|amd64" \
-    source="https://github.com/Akkudoktor-EOS/EOS" \
-    org.opencontainers.image.source="https://github.com/Akkudoktor-EOS/EOS" \
-    org.opencontainers.image.licenses="Apache-2.0"
+    source="https://github.com/maxx3105/EOS" \
+    org.opencontainers.image.source="https://github.com/maxx3105/EOS" \
+    org.opencontainers.image.licenses="Apache-2.0" \
+    org.opencontainers.image.title="EOS for Victron Cerbo GX" \
+    org.opencontainers.image.description="EOS PV forecast with Victron Cerbo GX support for Synology Container Manager"
 
 ENV EOS_DIR="/opt/eos"
-# Create persistent data directory similar to home assistant add-on
-# - EOS_DATA_DIR: Persistent data directory
-# - MPLCONFIGDIR: user customizations to Mathplotlib
 ENV EOS_DATA_DIR="/data"
 ENV EOS_CACHE_DIR="${EOS_DATA_DIR}/cache"
-# Written by EOS after resolving its startup configuration.
 ENV EOS_HEALTHCHECK_PORT_FILE="${EOS_CACHE_DIR}/eos-healthcheck-port"
 ENV EOS_OUTPUT_DIR="${EOS_DATA_DIR}/output"
 ENV EOS_CONFIG_DIR="${EOS_DATA_DIR}/config"
 ENV MPLCONFIGDIR="${EOS_DATA_DIR}/mplconfigdir"
 
-# Overwrite when starting the container in a production environment
-ENV EOS_SERVER__EOSDASH_SESSKEY=s3cr3t
+# Standalone defaults. These make the image usable directly from Synology
+# Container Manager without a Compose file or extra environment variables.
+ENV EOS_SERVER__HOST="0.0.0.0"
+ENV EOS_SERVER__PORT="8503"
+ENV EOS_SERVER__EOSDASH_HOST="0.0.0.0"
+ENV EOS_SERVER__EOSDASH_PORT="8504"
+ENV EOS_SERVER__EOSDASH_SESSKEY="eos-victron-local-session"
 
-# Set environment variables to reduce threading needs
 ENV OPENBLAS_NUM_THREADS=1
 ENV OMP_NUM_THREADS=1
 ENV MKL_NUM_THREADS=1
 ENV PIP_PROGRESS_BAR=off
 ENV PIP_NO_COLOR=1
 
-# Generic environment
 ENV LANG=C.UTF-8
 ENV VENV_PATH=/opt/venv
-# - Use .venv for python commands
 ENV PATH="$VENV_PATH/bin:$PATH"
 
 WORKDIR ${EOS_DIR}
 
-# Runtime shared libraries only (no -dev packages, no compilers). Create the eos
-# user and the persistent data directories with eos ownership.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     adduser python3 libopenblas0 liblapack3 \
     && adduser --system --group --no-create-home eos \
@@ -103,7 +90,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /opt/venv /opt/venv
-# Editable install: the venv only points at the source tree, so it must be present.
 COPY src/ ./src
 
 ENTRYPOINT []
@@ -114,10 +100,6 @@ EXPOSE 8504
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD ["python", "-m", "akkudoktoreos.server.container_healthcheck"]
 
-# Ensure EOS and EOSdash bind to 0.0.0.0
-# EOS is started with root privileges. EOS will drop root privileges and switch to user eos.
 CMD ["python", "-m", "akkudoktoreos.server.eos", "--host", "0.0.0.0", "--run_as_user", "eos"]
 
-# Persistent data
-# (Not recognized by home assistant add-on management, but there we have /data anyway)
 VOLUME ["${EOS_DATA_DIR}"]
