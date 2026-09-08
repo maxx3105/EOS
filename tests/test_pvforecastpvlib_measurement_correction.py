@@ -14,7 +14,6 @@ from akkudoktoreos.utils.datetimeutil import to_datetime
 @pytest.fixture
 def provider(config_eos):
     """Create a PVLib provider with a configured PV production meter."""
-    config_eos.general.timezone = "Europe/Berlin"
     config_eos.pvforecast.provider = "PVForecastPVLib"
     config_eos.measurement.pv_production_emr_keys = ["pv1_emr"]
 
