@@ -132,7 +132,9 @@ class VictronAdapter(AdapterProvider):
         return raw - 0x10000 if raw & 0x8000 else raw
 
     @staticmethod
-    def _sum_available(values: list[Optional[float]], *, clamp_nonnegative: bool = False) -> Optional[float]:
+    def _sum_available(
+        values: list[Optional[float]], *, clamp_nonnegative: bool = False
+    ) -> Optional[float]:
         """Sum available values while ignoring unavailable Modbus sentinel values."""
         valid = [value for value in values if value is not None]
         if not valid:
@@ -272,7 +274,7 @@ class VictronAdapter(AdapterProvider):
                 self._pv_energy_kwh = energy_kwh
             elif delta_seconds > max_gap_seconds:
                 logger.warning(
-                    "Skipping Victron PV energy integration over a %.1f minute data gap",
+                    "Skipping Victron PV energy integration over a {:.1f} minute data gap",
                     delta_seconds / 60.0,
                 )
 
@@ -303,7 +305,7 @@ class VictronAdapter(AdapterProvider):
             self.last_error = None
             self.update_datetime = sample_time
             logger.info(
-                "Victron GX: PV=%.0f W, grid=%s W, load=%s W, battery=%s W, SoC=%s%%",
+                "Victron GX: PV={:.0f} W, grid={} W, load={} W, battery={} W, SoC={} %",
                 self.pv_power_w,
                 f"{self.grid_power_w:.0f}" if self.grid_power_w is not None else "n/a",
                 f"{self.load_power_w:.0f}" if self.load_power_w is not None else "n/a",
