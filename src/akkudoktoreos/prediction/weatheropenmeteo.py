@@ -227,7 +227,7 @@ class WeatherOpenMeteo(WeatherProvider):
             pd.Series: The data series corresponding to the description.
 
         Raises:
-            ValueError: If no key is found for '{description}'.
+            ValueError: If no key is found for the provided description.
         """
         key = WeatherDataRecord.key_from_description(description)
         if key is None:
@@ -249,7 +249,7 @@ class WeatherOpenMeteo(WeatherProvider):
             data (pd.Series): The pandas Series containing the data to update.
 
         Raises:
-            ValueError: If no key is found for '{description}'.
+            ValueError: If no key is found for the provided description.
         """
         key = WeatherDataRecord.key_from_description(description)
         if key is None:
