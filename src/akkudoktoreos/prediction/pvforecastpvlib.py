@@ -21,6 +21,12 @@ from akkudoktoreos.utils.datetimeutil import to_duration
 
 DeviceType = Literal["module", "inverter"]
 
+PV_MEASUREMENT_CORRECTION_INTERVAL = "15 minutes"
+PV_MEASUREMENT_CORRECTION_MIN_FORECAST_W = 250.0
+PV_MEASUREMENT_CORRECTION_MIN_FACTOR = 0.1
+PV_MEASUREMENT_CORRECTION_MAX_FACTOR = 2.0
+PV_MEASUREMENT_CORRECTION_DECAY_HOURS = 2.0
+
 
 # Memory cache for CEC databases
 _cec_cache: dict[Path, tuple[int, pd.DataFrame]] = {}
@@ -448,6 +454,109 @@ class PVForecastPVLib(PredictionMixin, PVForecastProvider):
         df["hour_cos"] = np.cos(2 * np.pi * fractional_hour / 24.0)
         return df
 
+    async def _recent_pv_measurement_power_w(self) -> Optional[float]:
+        """Return mean measured PV power over the most recent correction interval.
+
+        Measurements are expected as cumulative PV production energy meter readings in kWh,
+        configured through ``measurement.pv_production_emr_keys``. If any configured meter is
+        missing, invalid, or has reset during the interval, no correction is applied.
+        """
+        measurement_keys = self.config.measurement.pv_production_emr_keys
+        if not measurement_keys:
+            return None
+
+        interval = to_duration(PV_MEASUREMENT_CORRECTION_INTERVAL)
+        interval_start = self.ems_start_datetime - interval
+        interval_end = self.ems_start_datetime
+        total_energy_kwh = 0.0
+
+        for key in measurement_keys:
+            readings = await self.measurement.key_to_array(
+                key=key,
+                start_datetime=interval_start,
+                end_datetime=interval_end + interval,
+                interval=interval,
+                fill_method="time",
+                boundary="context",
+            )
+            try:
+                values = np.asarray(readings, dtype=float)
+            except (TypeError, ValueError):
+                logger.debug(f"Skipping PV correction: invalid meter readings for '{key}'.")
+                return None
+
+            if values.size != 2 or not np.all(np.isfinite(values)):
+                logger.debug(f"Skipping PV correction: incomplete meter readings for '{key}'.")
+                return None
+
+            energy_delta_kwh = float(values[1] - values[0])
+            if energy_delta_kwh < 0:
+                logger.debug(f"Skipping PV correction: meter '{key}' reset during interval.")
+                return None
+            total_energy_kwh += energy_delta_kwh
+
+        interval_hours = interval.total_seconds() / 3600.0
+        if interval_hours <= 0:
+            return None
+        return total_energy_kwh * 1000.0 / interval_hours
+
+    @staticmethod
+    def _apply_measurement_correction(
+        df_pvforecast: pd.DataFrame,
+        anchor_datetime: object,
+        measured_power_w: Optional[float],
+    ) -> pd.DataFrame:
+        """Bias-correct a short-term PV forecast using recent measured AC power.
+
+        The correction is bounded and exponentially decays back to the physical PVLib forecast,
+        so a local short-lived cloud condition does not distort the day-ahead prediction.
+        """
+        if measured_power_w is None or not np.isfinite(measured_power_w) or measured_power_w < 0:
+            return df_pvforecast
+        if df_pvforecast.empty:
+            return df_pvforecast
+
+        anchor = pd.Timestamp(anchor_datetime)
+        available = df_pvforecast.index <= anchor
+        if not available.any():
+            return df_pvforecast
+
+        model_power_w = float(df_pvforecast.loc[available, "ac_power"].iloc[-1])
+        if not np.isfinite(model_power_w) or model_power_w < PV_MEASUREMENT_CORRECTION_MIN_FORECAST_W:
+            return df_pvforecast
+
+        raw_factor = measured_power_w / model_power_w
+        correction_factor = float(
+            np.clip(
+                raw_factor,
+                PV_MEASUREMENT_CORRECTION_MIN_FACTOR,
+                PV_MEASUREMENT_CORRECTION_MAX_FACTOR,
+            )
+        )
+
+        corrected = df_pvforecast.copy()
+        future = corrected.index >= anchor
+        if not future.any():
+            return corrected
+
+        horizon_hours = (
+            (corrected.index[future] - anchor).total_seconds().to_numpy(dtype=float) / 3600.0
+        )
+        weights = np.exp(-horizon_hours / PV_MEASUREMENT_CORRECTION_DECAY_HOURS)
+        factors = 1.0 + (correction_factor - 1.0) * weights
+
+        corrected.loc[future, "ac_power"] = corrected.loc[future, "ac_power"].to_numpy() * factors
+        corrected.loc[future, "pv_dc_power"] = (
+            corrected.loc[future, "pv_dc_power"].to_numpy() * factors
+        )
+
+        logger.info(
+            "Applying recent PV measurement correction: "
+            f"measured={measured_power_w:.0f} W, modeled={model_power_w:.0f} W, "
+            f"factor={correction_factor:.2f}, decay={PV_MEASUREMENT_CORRECTION_DECAY_HOURS:.1f} h"
+        )
+        return corrected
+
     async def _update_data(self, force_update: Optional[bool] = False) -> None:
         # Both _sequence_lock and _record_lock are already held by the caller.
         # Use internal sync methods only — never await public async counterparts.
@@ -511,6 +620,15 @@ class PVForecastPVLib(PredictionMixin, PVForecastProvider):
 
         # Calculate th PV forecast
         df_pvforecast = self._calculate_pvlib_power(df_weather)
+
+        # If cumulative PV-production measurements are configured, use the most recent complete
+        # 15-minute interval to correct only the short-term part of the physical forecast.
+        measured_power_w = await self._recent_pv_measurement_power_w()
+        df_pvforecast = self._apply_measurement_correction(
+            df_pvforecast,
+            self.ems_start_datetime,
+            measured_power_w,
+        )
 
         for row in df_pvforecast.itertuples():
             await self._update_value(row.Index, "pvforecast_dc_power", float(row.pv_dc_power))  # type: ignore
