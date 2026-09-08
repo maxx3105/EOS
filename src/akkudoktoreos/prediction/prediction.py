@@ -2,28 +2,7 @@
 
 This module provides a `Prediction` class to manage and update a sequence of
 prediction providers. The `Prediction` class is a subclass of `PredictionContainer`
-and is initialized with a set of forecast providers, such as `WeatherBrightSky`,
-`WeatherClearOutside`, and `PVForecastAkkudoktor`.
-
-Usage:
-    Instantiate the `Prediction` class with the required providers, maintaining
-    the necessary order. Then call the `update` method to refresh forecasts from
-    all providers in sequence.
-
-Example:
-    # Create singleton prediction instance with prediction providers
-    from akkudoktoreos.prediction.prediction import prediction
-
-    await prediction.update_data()
-    print("Prediction:", prediction)
-
-Classes:
-    Prediction: Manages a list of forecast providers to fetch and update predictions.
-
-Attributes:
-    pvforecast_akkudoktor (PVForecastAkkudoktor): Forecast provider for photovoltaic data.
-    weather_brightsky (WeatherBrightSky): Weather forecast provider using BrightSky.
-    weather_clearoutside (WeatherClearOutside): Weather forecast provider using ClearOutside.
+and is initialized with a set of forecast providers.
 """
 
 from typing import Optional, Union
@@ -58,6 +37,7 @@ from akkudoktoreos.prediction.pvforecastforecastsolar import PVForecastForecastS
 from akkudoktoreos.prediction.pvforecasthomeassistant import PVForecastHomeAssistant
 from akkudoktoreos.prediction.pvforecastimport import PVForecastImport
 from akkudoktoreos.prediction.pvforecastpvlib import PVForecastPVLib
+from akkudoktoreos.prediction.pvforecastpvlibvictron import PVForecastPVLibVictron
 from akkudoktoreos.prediction.pvforecastpvnode import PVForecastPVNode
 from akkudoktoreos.prediction.pvforecastsolcast import PVForecastSolcast
 from akkudoktoreos.prediction.pvforecastvrm import PVForecastVrm
@@ -109,6 +89,7 @@ pvforecast_akkudoktor = PVForecastAkkudoktor()
 pvforecast_vrm = PVForecastVrm()
 pvforecast_homeassistant = PVForecastHomeAssistant()
 pvforecast_pvlib = PVForecastPVLib()
+pvforecast_pvlib_victron = PVForecastPVLibVictron()
 pvforecast_pvnode = PVForecastPVNode()
 pvforecast_forecastsolar = PVForecastForecastSolar()
 pvforecast_solcast = PVForecastSolcast()
@@ -144,6 +125,7 @@ def prediction_providers() -> list[
         PVForecastForecastSolar,
         PVForecastImport,
         PVForecastPVLib,
+        PVForecastPVLibVictron,
         PVForecastPVNode,
         PVForecastSolcast,
         PVForecastVrm,
@@ -181,6 +163,7 @@ def prediction_providers() -> list[
         pvforecast_vrm, \
         pvforecast_homeassistant, \
         pvforecast_pvlib, \
+        pvforecast_pvlib_victron, \
         pvforecast_pvnode, \
         pvforecast_forecastsolar, \
         pvforecast_solcast, \
@@ -191,15 +174,13 @@ def prediction_providers() -> list[
         weather_import
 
     # Care for provider sequence as providers may rely on others to be updated before.
-    #
-    # Inter provider dependencies:
-    # - pvforecast_pvlib depends on weather
+    # Weather stays before both PVLib providers.
     return [
-        weather_brightsky,  # weather maybe needed by the pvforcast, keep before
+        weather_brightsky,
         weather_clearoutside,
         weather_import,
         weather_openmeteo,
-        elecfee_fixed,  # elecfee maybe needed by elecprice and feedintariff, keep before
+        elecfee_fixed,
         elecfee_import,
         elecprice_akkudoktor,
         elecprice_energy_charts,
@@ -223,6 +204,7 @@ def prediction_providers() -> list[
         pvforecast_homeassistant,
         pvforecast_import,
         pvforecast_pvlib,
+        pvforecast_pvlib_victron,
         pvforecast_pvnode,
         pvforecast_solcast,
         pvforecast_vrm,
@@ -258,6 +240,7 @@ class Prediction(PredictionContainer):
             PVForecastHomeAssistant,
             PVForecastImport,
             PVForecastPVLib,
+            PVForecastPVLibVictron,
             PVForecastPVNode,
             PVForecastSolcast,
             PVForecastVrm,

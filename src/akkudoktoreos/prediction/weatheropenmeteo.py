@@ -38,9 +38,9 @@ WeatherDataOpenMeteoMapping: List[Tuple[str, Optional[str], Optional[Union[str, 
     ("wind_direction_10m", "Wind Direction (°)", 1),
     ("wind_gusts_10m", "Wind Gust Speed (kmph)", 3.6),  # m/s to km/h
     ("shortwave_radiation", "Global Horizontal Irradiance (W/m2)", 1),
-    ("direct_radiation", "Direct Normal Irradiance (W/m2)", 1),
+    ("direct_radiation", None, None),
     ("diffuse_radiation", "Diffuse Horizontal Irradiance (W/m2)", 1),
-    ("direct_normal_irradiance", None, None),
+    ("direct_normal_irradiance", "Direct Normal Irradiance (W/m2)", 1),
     ("global_tilted_irradiance", None, None),
     ("terrestrial_radiation", None, None),
     ("shortwave_radiation_instant", None, None),
@@ -110,7 +110,7 @@ class WeatherOpenMeteo(WeatherProvider):
         """Return the unique identifier for the Open-Meteo provider."""
         return "OpenMeteo"
 
-    @cache_in_file(with_ttl="1 hour")
+    @cache_in_file(with_ttl="15 minutes")
     def _request_forecast(self) -> dict:
         """Fetch weather forecast data from Open-Meteo API.
 
@@ -122,15 +122,17 @@ class WeatherOpenMeteo(WeatherProvider):
             dict: The parsed JSON response from Open-Meteo API containing forecast data.
 
         Raises:
-            ValueError: If the API response does not include expected `hourly` data.
+            ValueError: If the API response does not include expected forecast data.
         """
         source = "https://api.open-meteo.com/v1/forecast"
 
-        # Parameters for Open-Meteo API
+        # Request 15-minute data. In Central Europe Open-Meteo provides native
+        # sub-hourly solar radiation from high-resolution models (e.g. ICON-D2).
+        # Other hourly-only variables may be interpolated by Open-Meteo.
         params = {
             "latitude": self.config.general.latitude,
             "longitude": self.config.general.longitude,
-            "hourly": [
+            "minutely_15": [
                 "temperature_2m",
                 "relative_humidity_2m",
                 "precipitation",
@@ -148,7 +150,8 @@ class WeatherOpenMeteo(WeatherProvider):
                 "wind_direction_10m",
                 "wind_gusts_10m",
                 "shortwave_radiation",  # GHI
-                "direct_radiation",  # DNI
+                "direct_radiation",  # direct radiation on horizontal plane
+                "direct_normal_irradiance",  # DNI
                 "diffuse_radiation",  # DHI
                 "dew_point_2m",
                 "apparent_temperature",
@@ -188,8 +191,11 @@ class WeatherOpenMeteo(WeatherProvider):
 
         openmeteo_data = response.json()
 
-        if "hourly" not in openmeteo_data:
-            error_msg = f"Open-Meteo schema change. `hourly` expected to be part of Open-Meteo data: {openmeteo_data}."
+        if "minutely_15" not in openmeteo_data and "hourly" not in openmeteo_data:
+            error_msg = (
+                "Open-Meteo schema change. `minutely_15` or `hourly` expected to be part "
+                f"of Open-Meteo data: {openmeteo_data}."
+            )
             logger.error(error_msg)
             raise ValueError(error_msg)
 
@@ -211,7 +217,7 @@ class WeatherOpenMeteo(WeatherProvider):
             pd.Series: The data series corresponding to the description.
 
         Raises:
-            ValueError: If no key is found for the provided description.
+            ValueError: If no key is found for '{description}'.
         """
         key = WeatherDataRecord.key_from_description(description)
         if key is None:
@@ -233,7 +239,7 @@ class WeatherOpenMeteo(WeatherProvider):
             data (pd.Series): The pandas Series containing the data to update.
 
         Raises:
-            ValueError: If no key is found for the provided description.
+            ValueError: If no key is found for the description.
         """
         key = WeatherDataRecord.key_from_description(description)
         if key is None:
@@ -268,11 +274,18 @@ class WeatherOpenMeteo(WeatherProvider):
                 raise ValueError(error_msg)
             openmeteo_key_mapping[openmeteo_key] = (weatherdata_key, corr_factor)
 
-        # Extract timestamps and values from Open-Meteo response
-        hourly_data = openmeteo_data["hourly"]
-        timestamps = hourly_data["time"]
+        # Prefer native 15-minute data and keep hourly as compatibility fallback for
+        # existing caches/test fixtures and locations where sub-hourly data is unavailable.
+        forecast_data = openmeteo_data.get("minutely_15")
+        data_resolution = "15-minute"
+        if forecast_data is None:
+            forecast_data = openmeteo_data["hourly"]
+            data_resolution = "hourly fallback"
+        timestamps = forecast_data["time"]
 
-        logger.info("Using direct radiation values from Open-Meteo (GHI, DNI, DHI)")
+        logger.info(
+            f"Using {data_resolution} radiation values from Open-Meteo (GHI, DNI, DHI)"
+        )
 
         # Process the data for each timestamp
         for idx, timestamp in enumerate(timestamps):
@@ -283,9 +296,9 @@ class WeatherOpenMeteo(WeatherProvider):
                 if key is None:
                     continue
 
-                # Take value from hourly data, if available
-                if openmeteo_key in hourly_data:
-                    value = hourly_data[openmeteo_key][idx]
+                # Take value from the selected forecast dataset, if available
+                if openmeteo_key in forecast_data:
+                    value = forecast_data[openmeteo_key][idx]
                 else:
                     value = None
 

@@ -107,7 +107,8 @@ def test_irridiance_estimate_from_cloud_cover(provider):
 @patch("requests.get")
 def test_request_forecast(mock_get, provider, sample_openmeteo_1_json):
     """Test requesting forecast from Open-Meteo."""
-    # Mock response object
+    # Mock response object. The historic fixture is hourly and intentionally
+    # exercises the compatibility fallback in _request_forecast/_update_data.
     mock_response = Mock()
     mock_response.status_code = 200
     mock_response.json.return_value = sample_openmeteo_1_json
@@ -123,22 +124,30 @@ def test_request_forecast(mock_get, provider, sample_openmeteo_1_json):
     assert call_args[0][0] == "https://api.open-meteo.com/v1/forecast"
     assert "latitude" in call_args[1]["params"]
     assert "longitude" in call_args[1]["params"]
-    assert "hourly" in call_args[1]["params"]
+    assert "minutely_15" in call_args[1]["params"]
+    assert "shortwave_radiation" in call_args[1]["params"]["minutely_15"]
+    assert "direct_normal_irradiance" in call_args[1]["params"]["minutely_15"]
+    assert "diffuse_radiation" in call_args[1]["params"]["minutely_15"]
 
-    # Verify returned data structure
+    # Verify returned data structure. Old hourly responses are accepted as a fallback.
     assert isinstance(openmeteo_data, dict)
     assert "hourly" in openmeteo_data
     assert "time" in openmeteo_data["hourly"]
     assert "temperature_2m" in openmeteo_data["hourly"]
-    assert "shortwave_radiation" in openmeteo_data["hourly"]  # GHI
-    assert "direct_radiation" in openmeteo_data["hourly"]     # DNI
-    assert "diffuse_radiation" in openmeteo_data["hourly"]    # DHI
+    assert "shortwave_radiation" in openmeteo_data["hourly"]
+    assert "diffuse_radiation" in openmeteo_data["hourly"]
 
 
 @pytest.mark.asyncio
 @patch("requests.get")
 async def test_update_data(mock_get, provider, sample_openmeteo_1_json, cache_store):
     """Test fetching and processing forecast from Open-Meteo."""
+    # The old fixture predates direct_normal_irradiance. Add the correctly named
+    # Open-Meteo DNI field while preserving its known expected value.
+    sample_openmeteo_1_json["hourly"]["direct_normal_irradiance"] = sample_openmeteo_1_json[
+        "hourly"
+    ]["direct_radiation"]
+
     # Mock response object
     mock_response = Mock()
     mock_response.status_code = 200
@@ -159,8 +168,6 @@ async def test_update_data(mock_get, provider, sample_openmeteo_1_json, cache_st
     assert len(provider) > 0
 
     # Verify that direct radiation values were properly mapped
-    # Get the first record and check for irradiance values
-    value_datetime = to_datetime("2026-03-04 09:00:00+01:00", in_timezone="Europe/Berlin")
     weather_ghi = await provider.key_to_value("weather_ghi", target_datetime=start_datetime)
     weather_dni = await provider.key_to_value("weather_dni", target_datetime=start_datetime)
     weather_dhi = await provider.key_to_value("weather_dhi", target_datetime=start_datetime)
@@ -176,24 +183,14 @@ async def test_update_data(mock_get, provider, sample_openmeteo_1_json, cache_st
 
 def test_openmeteo_radiation_mapping(provider):
     """Test that radiation values are correctly mapped from Open-Meteo keys."""
-    # Verify mapping contains the radiation fields
     from akkudoktoreos.prediction.weatheropenmeteo import WeatherDataOpenMeteoMapping
 
-    radiation_keys = [item[0] for item in WeatherDataOpenMeteoMapping
-                     if item[0] in ['shortwave_radiation', 'direct_radiation', 'diffuse_radiation']]
+    mapping = {key: desc for key, desc, _ in WeatherDataOpenMeteoMapping}
 
-    assert 'shortwave_radiation' in radiation_keys
-    assert 'direct_radiation' in radiation_keys
-    assert 'diffuse_radiation' in radiation_keys
-
-    # Verify they map to correct descriptions
-    for key, desc, _ in WeatherDataOpenMeteoMapping:
-        if key == 'shortwave_radiation':
-            assert desc == "Global Horizontal Irradiance (W/m2)"
-        elif key == 'direct_radiation':
-            assert desc == "Direct Normal Irradiance (W/m2)"
-        elif key == 'diffuse_radiation':
-            assert desc == "Diffuse Horizontal Irradiance (W/m2)"
+    assert mapping["shortwave_radiation"] == "Global Horizontal Irradiance (W/m2)"
+    assert mapping["direct_radiation"] is None
+    assert mapping["direct_normal_irradiance"] == "Direct Normal Irradiance (W/m2)"
+    assert mapping["diffuse_radiation"] == "Diffuse Horizontal Irradiance (W/m2)"
 
 
 def test_openmeteo_unit_conversions(provider):
@@ -201,13 +198,15 @@ def test_openmeteo_unit_conversions(provider):
     from akkudoktoreos.prediction.weatheropenmeteo import WeatherDataOpenMeteoMapping
 
     # Check wind speed conversion (m/s to km/h)
-    wind_speed_mapping = next(item for item in WeatherDataOpenMeteoMapping
-                             if item[0] == 'wind_speed_10m')
+    wind_speed_mapping = next(
+        item for item in WeatherDataOpenMeteoMapping if item[0] == "wind_speed_10m"
+    )
     assert wind_speed_mapping[2] == 3.6  # Conversion factor
 
     # Check pressure conversion (Pa to hPa)
-    pressure_mapping = next(item for item in WeatherDataOpenMeteoMapping
-                           if item[0] == 'pressure_msl')
+    pressure_mapping = next(
+        item for item in WeatherDataOpenMeteoMapping if item[0] == "pressure_msl"
+    )
     assert pressure_mapping[2] == 0.01  # Conversion factor
 
 
@@ -245,11 +244,13 @@ def test_openmeteo_request_mode_selection(
 
     # Patch to_datetime to return fixed_now when called without a datetime argument
     with patch("akkudoktoreos.prediction.weatheropenmeteo.to_datetime") as mock_to_datetime:
+
         def to_datetime_side_effect(dt=None, in_timezone=None):
             if dt is None:
                 return fixed_now
             # Otherwise fall back to the real function
             from akkudoktoreos.utils.datetimeutil import to_datetime as real_to_datetime
+
             return real_to_datetime(dt, in_timezone=in_timezone)
 
         mock_to_datetime.side_effect = to_datetime_side_effect
@@ -289,10 +290,9 @@ async def test_openmeteo_development_forecast_data(provider, config_eos, is_syst
     if not is_system_test:
         return
 
-    # Us actual date for forecast (not historic data)
+    # Use actual date for forecast (not historic data)
     now = to_datetime(in_timezone="Europe/Berlin")
     start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    end_date = start_date + pd.Timedelta(days=3)  # 3 Tage Vorhersage
 
     ems_eos = get_ems()
     ems_eos.set_start_datetime(start_date)
@@ -319,21 +319,29 @@ async def test_openmeteo_development_forecast_data(provider, config_eos, is_syst
         if len(provider) > 0:
             records = list(provider.records)
 
-            # Check fo radiation values available
-            has_ghi = any(hasattr(r, 'ghi') and r.ghi is not None for r in records)
-            has_dni = any(hasattr(r, 'dni') and r.dni is not None for r in records)
-            has_dhi = any(hasattr(r, 'dhi') and r.dhi is not None for r in records)
+            # Check for radiation values available
+            has_ghi = any(hasattr(r, "ghi") and r.ghi is not None for r in records)
+            has_dni = any(hasattr(r, "dni") and r.dni is not None for r in records)
+            has_dhi = any(hasattr(r, "dhi") and r.dhi is not None for r in records)
 
-            logger.info(f"Open-Meteo data verification: GHI={has_ghi}, DNI={has_dni}, DHI={has_dhi}")
+            logger.info(
+                f"Open-Meteo data verification: GHI={has_ghi}, DNI={has_dni}, DHI={has_dhi}"
+            )
 
             # Optional: Check for positive values (at day time)
-            daytime_values = [getattr(r, 'ghi', 0) for r in records[:24]
-                            if hasattr(r, 'ghi') and r.ghi is not None and r.ghi > 10]
+            daytime_values = [
+                getattr(r, "ghi", 0)
+                for r in records[:24]
+                if hasattr(r, "ghi") and r.ghi is not None and r.ghi > 10
+            ]
             if daytime_values:
                 logger.info(f"Found {len(daytime_values)} positive GHI values")
 
     except Exception as e:
         logger.error(f"Error fetching Open-Meteo data: {e}")
-        # Debug-Ausgabe
-        logger.error(f"Request would have been: https://api.open-meteo.com/v1/forecast?latitude=50.0&longitude=10.0&hourly=temperature_2m,relative_humidity_2m,shortwave_radiation&timezone=Europe/Berlin&forecast_days=3")
+        logger.error(
+            "Request would have been: https://api.open-meteo.com/v1/forecast?"
+            "latitude=50.0&longitude=10.0&minutely_15=temperature_2m,relative_humidity_2m,"
+            "shortwave_radiation,direct_normal_irradiance,diffuse_radiation&timezone=Europe/Berlin"
+        )
         raise

@@ -63,6 +63,15 @@ docker run -d \
   akkudoktor/eos:latest
 ```
 
+### Victron Cerbo GX + Synology DS920+
+
+This fork contains a direct, read-only Victron GX Modbus-TCP adapter and a Synology-specific
+Compose setup. It can run the 15-minute Open-Meteo/PVLib forecast and use measured Cerbo GX PV
+production to correct the near-term forecast without requiring Home Assistant, Node-RED or MQTT.
+The `PVForecastPVLibVictron` provider aligns feedback to the latest completed 15-minute slot.
+
+See the step-by-step German guide: **[EOS + Victron Cerbo GX auf Synology DS920+](SYNOLOGY_VICTRON.md)**.
+
 ## System Requirements
 
 - **Python**: 3.11 or higher

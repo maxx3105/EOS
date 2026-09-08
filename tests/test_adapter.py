@@ -16,6 +16,7 @@ from akkudoktoreos.adapter.adapter import (
 from akkudoktoreos.adapter.adapterabc import AdapterContainer
 from akkudoktoreos.adapter.homeassistant import HomeAssistantAdapter
 from akkudoktoreos.adapter.nodered import NodeREDAdapter
+from akkudoktoreos.adapter.victron import VictronAdapter
 from akkudoktoreos.core.coreabc import get_adapter
 
 # ---------- Typed aliases for fixtures ----------
@@ -44,15 +45,17 @@ class TestAdapter:
         assert isinstance(adapter, Adapter)
 
     def test_providers_present(self, adapter: AdapterFixture) -> None:
-        """Adapter must contain HA and NodeRED providers."""
-        assert len(adapter.providers) == 2
+        """Adapter must contain Home Assistant, NodeRED and Victron providers."""
+        assert len(adapter.providers) == 3
         assert any(isinstance(p, HomeAssistantAdapter) for p in adapter.providers)
         assert any(isinstance(p, NodeREDAdapter) for p in adapter.providers)
+        assert any(isinstance(p, VictronAdapter) for p in adapter.providers)
 
     def test_adapter_order(self, adapter: AdapterFixture) -> None:
-        """Provider order should match HomeAssistantAdapter -> NodeREDAdapter."""
+        """Provider order should match HomeAssistant -> NodeRED -> Victron."""
         assert isinstance(adapter.providers[0], HomeAssistantAdapter)
         assert isinstance(adapter.providers[1], NodeREDAdapter)
+        assert isinstance(adapter.providers[2], VictronAdapter)
 
     # ----- AdapterCommonSettings -----
 
@@ -62,18 +65,20 @@ class TestAdapter:
 
     def test_settings_accepts_single_provider(self, settings: SettingsFixture) -> None:
         """Settings should accept a single provider literal."""
-        settings.provider = ["HomeAssistant"]
-        assert settings.provider == ["HomeAssistant"]
+        settings.provider = ["Victron"]
+        assert settings.provider == ["Victron"]
 
     def test_settings_accepts_multiple_providers(self, settings: SettingsFixture) -> None:
         """Settings should accept multiple provider literals."""
-        settings.provider = ["HomeAssistant", "NodeRED"]
+        settings.provider = ["HomeAssistant", "Victron"]
         assert isinstance(settings.provider, list)
-        assert settings.provider == ["HomeAssistant", "NodeRED"]
+        assert settings.provider == ["HomeAssistant", "Victron"]
 
     def test_provider_sub_settings(self, settings: SettingsFixture) -> None:
-        """sub-settings (homeassistant & nodered) must be initialized."""
+        """Adapter sub-settings must be initialized."""
         assert hasattr(settings, "homeassistant")
         assert hasattr(settings, "nodered")
+        assert hasattr(settings, "victron")
         assert settings.homeassistant is not None
         assert settings.nodered is not None
+        assert settings.victron is not None
