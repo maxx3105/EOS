@@ -86,9 +86,6 @@ class VictronAdapterCommonSettings(SettingsBaseModel):
 class VictronAdapter(AdapterProvider):
     """Read-only Cerbo GX adapter for PV feedback and basic system telemetry."""
 
-    SYSTEM_REGISTER_START: ClassVar[int] = 808
-    SYSTEM_REGISTER_END: ClassVar[int] = 851
-
     connected: bool = Field(default=False)
     last_error: Optional[str] = Field(default=None)
     pv_power_w: Optional[float] = Field(default=None)
@@ -204,32 +201,34 @@ class VictronAdapter(AdapterProvider):
         return list(struct.unpack(f">{count}H", pdu[2:]))
 
     def _read_system_snapshot(self) -> dict[str, Optional[float]]:
-        """Read and decode the relevant com.victronenergy.system register block."""
-        registers = self._read_holding_registers(
-            self.SYSTEM_REGISTER_START,
-            self.SYSTEM_REGISTER_END - self.SYSTEM_REGISTER_START + 1,
-        )
+        """Read and decode known com.victronenergy.system register ranges."""
+        # Keep requests limited to known contiguous ranges. Requesting a large block
+        # containing an unsupported/reserved register can make the whole Modbus call fail.
+        ac_system = self._read_holding_registers(808, 15)  # 808..822
+        battery = self._read_holding_registers(842, 2)  # 842..843
+        dc_pv = self._read_holding_registers(850, 1)  # 850
 
-        def raw(register: int) -> int:
-            return registers[register - self.SYSTEM_REGISTER_START]
+        def ac_raw(register: int) -> int:
+            return ac_system[register - 808]
 
         ac_pv_values: list[Optional[float]] = []
         if self.config.adapter.victron.include_ac_coupled_pv:
             for register in range(808, 817):
-                ac_pv_values.append(self._decode_uint16(raw(register)))
+                value = self._decode_uint16(ac_raw(register))
+                ac_pv_values.append(float(value) if value is not None else None)
 
-        dc_pv_power = self._decode_uint16(raw(850))
+        dc_pv_power = self._decode_uint16(dc_pv[0])
         pv_values = ac_pv_values + [float(dc_pv_power) if dc_pv_power is not None else None]
         pv_power = self._sum_available(pv_values, clamp_nonnegative=True)
 
         load_power = self._sum_available(
-            [self._decode_int16(raw(register)) for register in range(817, 820)]
+            [self._decode_int16(ac_raw(register)) for register in range(817, 820)]
         )
         grid_power = self._sum_available(
-            [self._decode_int16(raw(register)) for register in range(820, 823)]
+            [self._decode_int16(ac_raw(register)) for register in range(820, 823)]
         )
-        battery_power = self._decode_int16(raw(842))
-        battery_soc = self._decode_uint16(raw(843))
+        battery_power = self._decode_int16(battery[0])
+        battery_soc = self._decode_uint16(battery[1])
 
         return {
             "pv_power_w": pv_power,
