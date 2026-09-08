@@ -1,148 +1,105 @@
 # EOS + Victron Cerbo GX auf Synology DS920+
 
-Diese Anleitung installiert EOS auf einer **Synology DS920+** mit **Container Manager** und verbindet EOS direkt und nur lesend mit einem **Victron Cerbo GX**.
-
-Die Installation ist absichtlich einfach gehalten:
+Diese Variante ist für eine möglichst einfache Installation auf einer **Synology DS920+** gedacht.
+EOS läuft als fertiges Docker-Image und wird anschließend **im Browser eingerichtet**.
 
 ```text
-2 Dateien auf die NAS kopieren
-        |
-        v
-3 Pflichtwerte eintragen
+1 Compose-Datei auf die NAS
         |
         v
 Container-Manager-Projekt starten
         |
         v
-fertiges Image wird aus GHCR geladen
+http://NAS-IP:8504 öffnen
         |
         v
-EOS läuft
+Standort + Cerbo + PV-Daten eintragen
+        |
+        v
+Einrichtung speichern
 ```
 
-Es werden **kein Git, kein Dockerfile, kein lokaler Build, kein Home Assistant, kein Node-RED und kein MQTT-Broker** benötigt.
+Nicht benötigt werden: Git, SSH, Dockerfile, lokaler Docker-Build, Python, Home Assistant, Node-RED oder MQTT.
 
-Das fertige Image lautet:
+Das Image lautet:
 
 ```text
 ghcr.io/maxx3105/eos-victron:latest
 ```
 
-> **Sicherheit:** Der Victron-Adapter dieser Variante führt nur Modbus-Lesezugriffe aus. Er schreibt keine ESS-Sollwerte und verändert keine Cerbo- oder Wechselrichter-Einstellungen.
+> Der Victron-Adapter arbeitet in dieser Ausbaustufe nur lesend. Es werden keine ESS-Sollwerte oder Geräteeinstellungen geschrieben.
 
 ## 1. Voraussetzungen
 
-Du brauchst:
-
-- Synology DS920+ mit einer kompatiblen Version von Container Manager
-- Cerbo GX und Synology im selben lokalen Netzwerk oder per Routing erreichbar
-- eine feste bzw. reservierte IP-Adresse für den Cerbo GX
-- Internetzugriff der NAS für Open-Meteo und das Herunterladen des Container-Images
-- später für PVLib die Daten deiner PV-Anlage: Neigung, Azimut, Modul- und Wechselrichterdaten
+- Synology DS920+ mit einer kompatiblen Version von **Container Manager**
+- Victron Cerbo GX / GX-Gerät im lokalen Netzwerk
+- Internetzugriff der NAS für das Container-Image und Open-Meteo
+- feste bzw. reservierte IP-Adressen für NAS und Cerbo sind empfohlen
+- Daten der PV-Anlage: Neigung, Azimut, Modulleistung, Module pro String, Anzahl Strings und Wechselrichterleistung
 
 ## 2. Cerbo GX vorbereiten
 
-Am Cerbo GX **Modbus TCP Server** aktivieren.
+Am Cerbo den **Modbus TCP Server** aktivieren.
 
-Je nach Venus-OS-Version findest du die Einstellung unter:
+Je nach Venus-OS-Version:
 
 ```text
 Einstellungen -> Integrationen -> Modbus TCP Server
 ```
 
-oder bei älteren Versionen unter:
+oder bei älteren Versionen:
 
 ```text
 Einstellungen -> Dienste -> Modbus TCP
 ```
 
-Dann:
+Danach:
 
-1. Modbus TCP Server aktivieren.
-2. Wenn angeboten, die Zugriffsberechtigung auf **Read-only / nur Lesen** stellen.
-3. Unter den verfügbaren Diensten `com.victronenergy.system` prüfen.
-4. Für diese Systemdaten normalerweise **Unit ID 100** verwenden.
-5. IP-Adresse des Cerbo notieren, zum Beispiel `192.168.1.50`.
+1. Modbus TCP aktivieren.
+2. Wenn verfügbar, Zugriff auf **Read-only / Nur Lesen** stellen.
+3. `com.victronenergy.system` unter den verfügbaren Diensten prüfen.
+4. Für die Systemdaten normalerweise **Unit ID 100** verwenden.
+5. IP-Adresse des Cerbo notieren.
 
-EOS verwendet standardmäßig TCP-Port `502`.
+Standard-Port ist TCP `502`.
 
 ## 3. Ordner auf der Synology anlegen
 
-In File Station diesen Ordner anlegen:
+In **File Station**:
 
 ```text
 /volume1/docker/eos-victron
 ```
 
-Die fertige Ordnerstruktur ist sehr klein:
+Die Ordnerstruktur bleibt minimal:
 
 ```text
 /volume1/docker/eos-victron/
 ├── docker-compose.yml
-├── synology.env
 └── synology-data/
 ```
 
-`synology-data` wird beim ersten Start automatisch verwendet und enthält die persistenten EOS-Daten.
+`synology-data` enthält später Konfiguration, Datenbank, Messwerte und Cache und muss bei Updates erhalten bleiben.
 
-## 4. Zwei Dateien aus dem Repository übernehmen
+## 4. Compose-Datei kopieren
 
-Aus dem `main`-Branch dieses Repositories brauchst du nur:
+Aus dem `main`-Branch dieses Repositories wird nur folgende Datei benötigt:
 
 ```text
 docker-compose.synology.yaml
-synology.env.example
 ```
 
-Auf der NAS benennst du sie um zu:
+Auf der NAS als
 
 ```text
 docker-compose.yml
-synology.env
 ```
 
-Du musst **nicht das komplette Repository** auf die Synology kopieren.
+speichern.
 
-## 5. Nur drei Pflichtwerte ändern
+Die Compose-Datei lädt das fertige Image und bindet den persistenten Datenordner ein. Eine `synology.env` ist für die normale Installation nicht mehr nötig.
 
-Öffne `synology.env`.
-
-Für die erste Installation musst du nur diese drei Werte anpassen:
-
-```dotenv
-# 1/3 Breitengrad der PV-Anlage
-EOS_GENERAL__LATITUDE=48.2082
-
-# 2/3 Längengrad der PV-Anlage
-EOS_GENERAL__LONGITUDE=16.3738
-
-# 3/3 IP-Adresse des Cerbo GX
-EOS_ADAPTER__VICTRON__HOST=192.168.1.50
-```
-
-Empfohlen ist zusätzlich ein eigener langer Session-Key:
-
-```dotenv
-EOS_SERVER__EOSDASH_SESSKEY=hier-eine-lange-zufaellige-zeichenfolge-eintragen
-```
-
-Die übrigen Werte sind bereits sinnvoll vorbelegt:
-
-```dotenv
-EOS_EMS__MODE=PREDICTION
-EOS_EMS__INTERVAL=300
-EOS_WEATHER__WEATHER_PROVIDER=OpenMeteo
-EOS_PVFORECAST__PVFORECAST_PROVIDER=PVForecastPVLibVictron
-EOS_PREDICTION__HOURS=48
-EOS_ADAPTER__PROVIDER=["Victron"]
-EOS_ADAPTER__VICTRON__PORT=502
-EOS_ADAPTER__VICTRON__UNIT_ID=100
-EOS_ADAPTER__VICTRON__INCLUDE_AC_COUPLED_PV=true
-```
-
-Damit läuft EOS alle fünf Minuten im sicheren Prediction-Modus.
-
-## 6. Projekt in Container Manager erstellen
+## 5. Projekt im Container Manager erstellen
 
 In DSM:
 
@@ -159,37 +116,17 @@ Projektname: eos-victron
 Pfad:        /volume1/docker/eos-victron
 ```
 
-Als Compose-Datei die dort liegende `docker-compose.yml` verwenden.
+Als Compose-Datei `docker-compose.yml` verwenden und das Projekt erstellen/starten.
 
-Diese Datei enthält **keinen lokalen Build mehr**. Container Manager lädt automatisch:
+Container Manager lädt automatisch:
 
 ```text
 ghcr.io/maxx3105/eos-victron:latest
 ```
 
-Beim ersten Start kann das Herunterladen einige Zeit beanspruchen. Die DS920+ muss dafür Internetzugriff haben.
+## 6. EOS öffnen
 
-## 7. Projekt starten
-
-Nach dem Erstellen das Projekt starten.
-
-Unter:
-
-```text
-Container Manager -> Container -> eos-victron -> Protokoll
-```
-
-kannst du den Start verfolgen.
-
-Bei erfolgreicher Cerbo-Verbindung erscheint sinngemäß:
-
-```text
-Victron GX: PV=4200 W, grid=-350 W, load=1100 W, battery=2750 W, SoC=72 %
-```
-
-## 8. EOS öffnen
-
-Angenommen die NAS hat die IP `192.168.1.20`:
+Beispiel: Die NAS hat `192.168.1.20`.
 
 ```text
 Dashboard: http://192.168.1.20:8504
@@ -197,134 +134,147 @@ API:       http://192.168.1.20:8503
 API Docs:  http://192.168.1.20:8503/docs
 ```
 
-## 9. PV-Anlage konfigurieren
+Auf der Startseite befindet sich die **Schnelleinrichtung: Synology + Victron Cerbo GX**.
 
-Für die physikalische PVLib-Prognose müssen die PV-Flächen in EOS konfiguriert werden.
+## 7. Browser-Einrichtung
 
-Wichtig sind pro Fläche insbesondere:
+Der Assistent fragt folgende Werte ab.
 
-- `surface_tilt`: Modulneigung
-- `surface_azimuth`: 0=Norden, 90=Osten, 180=Süden, 270=Westen
-- Modulmodell
-- Wechselrichtermodell
+### Standort
+
+- Breitengrad
+- Längengrad
+
+### Cerbo GX
+
+- IP-Adresse oder Hostname
+
+Port `502`, Unit ID `100`, Timeout und Read-only-Datenzugriff sind für die Standardinstallation bereits vorgesehen.
+
+### PV-Anlage – erste Dachfläche
+
+- Modulneigung in Grad
+- Azimut: `0=Norden`, `90=Osten`, `180=Süden`, `270=Westen`
+- Modulleistung in Wp
 - Module pro String
 - Strings pro Wechselrichter
+- Wechselrichterleistung in W
 
-Bei einer Ost/West-Anlage beide Flächen separat anlegen. EOS summiert deren Prognosen.
+Für die einfache Einrichtung reicht die Leistung von Modul und Wechselrichter. PVLib sucht daraus ein passendes CEC-Modell.
 
-## 10. Was der Cerbo-Adapter liest
+Nach **Einrichtung speichern** setzt EOS automatisch:
 
-EOS liest unter anderem:
+```text
+EMS-Modus:            PREDICTION
+Intervall:            5 Minuten
+Wetter:               OpenMeteo
+PV-Prognose:          PVForecastPVLibVictron
+Prognosehorizont:     48 Stunden
+Adapter:              Victron
+Cerbo Port:           502
+Cerbo Unit ID:        100
+PV-Istwertkorrektur:  aktiv
+```
 
-- gesamte PV-Istleistung
+Die Konfiguration wird unter `/data` gespeichert und liegt damit physisch im NAS-Ordner `synology-data`.
+
+## 8. Mehrere PV-Flächen
+
+Der Schnelleinrichtungsassistent legt bewusst zunächst **eine** PV-Fläche an.
+
+Bei Ost/West, mehreren Wechselrichtern oder unterschiedlich geneigten Flächen anschließend im Dashboard unter **Config** weitere `pvforecast.planes` ergänzen.
+
+## 9. Was EOS vom Cerbo liest
+
+Unter anderem:
+
+- AC-gekoppelte PV-Leistung
+- DC-PV / Victron MPPT
 - Netzleistung
 - AC-Verbrauch
 - Batterieleistung
 - Batterie-SoC
 
-Aus der PV-Leistung erzeugt EOS den kumulativen Messwert:
+EOS bildet aus der PV-Istleistung einen lokalen kumulativen Zähler:
 
 ```text
 victron_pv_emr [kWh]
 ```
 
-Dieser wird automatisch für die laufende PV-Prognosekorrektur verwendet.
+Dieser wird automatisch für die kurzfristige Korrektur der PV-Prognose verwendet.
 
-## 11. AC-PV und Victron-MPPT
+## 10. Prognosekorrektur
 
-Standardmäßig gilt:
+Der Victron-spezifische PVLib-Provider nutzt das letzte abgeschlossene 15-Minuten-Fenster und vergleicht die gemessene PV-Energie mit der modellierten PV-Energie.
 
-```dotenv
-EOS_ADAPTER__VICTRON__INCLUDE_AC_COUPLED_PV=true
-```
+Der Korrekturfaktor ist begrenzt und klingt mit zunehmendem Prognosehorizont wieder in Richtung der physikalischen Wetter-/PVLib-Prognose ab.
 
-Damit berücksichtigt EOS AC-gekoppelte PV plus DC-PV/MPPT.
+Direkt nach dem ersten Start kann deshalb noch keine Istwertkorrektur sichtbar sein: Zunächst muss EOS genügend aktuelle Cerbo-Messwerte sammeln.
 
-Wenn du bewusst nur DC-PV verwenden möchtest:
+## 11. Update
 
-```dotenv
-EOS_ADAPTER__VICTRON__INCLUDE_AC_COUPLED_PV=false
-```
+Für Updates ist kein Git-Pull und kein lokaler Build nötig.
 
-## 12. Update
+1. Container-Manager-Projekt stoppen.
+2. `ghcr.io/maxx3105/eos-victron:latest` aktualisieren/herunterladen.
+3. Projekt erneut erstellen bzw. starten.
 
-Das Update benötigt keinen Git-Pull und keinen Build mehr.
-
-Neue Versionen werden in GitHub automatisch als neues Image veröffentlicht:
+Nicht löschen:
 
 ```text
-ghcr.io/maxx3105/eos-victron:latest
-```
-
-Für ein Update:
-
-1. Projekt in Container Manager stoppen.
-2. Aktuelles Image `ghcr.io/maxx3105/eos-victron:latest` erneut herunterladen bzw. aktualisieren.
-3. Projekt erneut erstellen/starten, sodass das neue Image verwendet wird.
-
-Die Daten bleiben erhalten, weil sie außerhalb des Containers unter folgendem Ordner liegen:
-
-```text
-/volume1/docker/eos-victron/synology-data
-```
-
-`synology.env` ebenfalls nicht löschen oder überschreiben.
-
-## 13. Backup
-
-Für ein vollständiges lokales Backup reichen im Wesentlichen:
-
-```text
-/volume1/docker/eos-victron/synology.env
 /volume1/docker/eos-victron/synology-data/
 ```
 
-Diese beiden Pfade am besten in Hyper Backup aufnehmen.
+Die Browser-Konfiguration bleibt dadurch erhalten.
 
-Die Dateien `docker-compose.yml` und das Container-Image können jederzeit erneut aus dem Repository bzw. GHCR bezogen werden.
+## 12. Backup
 
-## 14. Wiederherstellung
+Für EOS ist vor allem dieser Ordner zu sichern:
 
-Nach einem NAS-Ausfall oder einer Neuinstallation:
+```text
+/volume1/docker/eos-victron/synology-data/
+```
+
+Diesen Ordner in **Hyper Backup** aufnehmen.
+
+Optional zusätzlich sichern:
+
+```text
+/volume1/docker/eos-victron/docker-compose.yml
+```
+
+Das Container-Image selbst muss nicht gesichert werden, weil es erneut aus GHCR geladen werden kann.
+
+## 13. Wiederherstellung
 
 1. Container Manager installieren.
 2. `/volume1/docker/eos-victron` anlegen.
 3. `docker-compose.yml` wiederherstellen.
-4. `synology.env` aus dem Backup wiederherstellen.
-5. `synology-data` zurückkopieren.
-6. Projekt in Container Manager erstellen und starten.
+4. `synology-data` aus dem Backup zurückkopieren.
+5. Projekt erstellen/starten.
 
-Das Image wird erneut aus GHCR geladen.
+EOS lädt das Image erneut und verwendet die vorhandene persistente Konfiguration und Messhistorie.
 
-## 15. Fehlerbehebung
+## 14. Fehlerbehebung
 
 ### Image kann nicht geladen werden
 
-Wenn bei `ghcr.io/maxx3105/eos-victron:latest` ein Fehler wie `denied` oder `unauthorized` erscheint, prüfen, ob das GHCR-Paket auf GitHub öffentlich sichtbar ist.
+Bei `denied`, `unauthorized` oder `manifest unknown` prüfen:
 
-### `Cannot connect to Victron GX ...:502`
+- GitHub Actions im Fork aktiviert?
+- `docker-build` erfolgreich gelaufen?
+- GHCR-Paket `eos-victron` öffentlich?
+- NAS hat Internet- und DNS-Zugriff?
 
-Prüfen:
-
-- Cerbo-IP in `synology.env`
-- Modbus TCP am Cerbo aktiviert
-- Port 502 erreichbar
-- NAS und Cerbo im gleichen Netz bzw. Routing korrekt
-- Firewall/VLAN-Regeln
-
-### `Modbus exception`
-
-Am Cerbo prüfen, welche Unit ID für `com.victronenergy.system` angezeigt wird. Standardmäßig wird Unit ID 100 verwendet.
-
-### EOS läuft, Dashboard ist nicht erreichbar
+### Dashboard nicht erreichbar
 
 Prüfen:
 
-- Container läuft
-- NAS-Firewall
-- Port 8504 ist nicht anderweitig belegt
+- Container läuft?
+- NAS-Firewall erlaubt Port 8504?
+- Port 8504 bereits belegt?
 
-Bei einer Portkollision kannst du in `docker-compose.yml` zum Beispiel ändern:
+Bei einer Kollision können die Host-Ports in `docker-compose.yml` geändert werden:
 
 ```yaml
 ports:
@@ -334,17 +284,44 @@ ports:
 
 Dann ist das Dashboard unter `http://NAS-IP:18504` erreichbar.
 
-### Noch keine Istwertkorrektur
+### Cerbo nicht erreichbar
 
-Direkt nach dem ersten Start fehlen zunächst historische Cerbo-Messungen. EOS verwendet dann vorübergehend die reine PVLib-Prognose. Sobald genügend zusammenhängende Messwerte vorliegen, wird die Korrektur automatisch aktiv.
+Im Container-Protokoll auf Meldungen wie
+
+```text
+Cannot connect to Victron GX ...:502
+```
+
+achten.
+
+Prüfen:
+
+- IP-Adresse im Browser-Assistenten korrekt?
+- Modbus TCP am Cerbo aktiviert?
+- Port 502 zwischen NAS und Cerbo erreichbar?
+- Firewall/VLAN-Regeln?
+- `com.victronenergy.system` vorhanden?
+- Unit ID 100 korrekt?
+
+Die Cerbo-IP kann jederzeit erneut über die Schnelleinrichtung oder detailliert unter **Config -> adapter.victron.host** geändert werden.
+
+### Prognose fehlt
+
+Prüfen:
+
+- Standort korrekt?
+- PV-Daten vollständig?
+- Internetzugriff zu Open-Meteo?
+- unter Config steht `weather.provider = OpenMeteo`?
+- unter Config steht `pvforecast.provider = PVForecastPVLibVictron`?
 
 ### NAS war länger ausgeschaltet
 
-Lange Datenlücken werden absichtlich nicht mit der letzten bekannten PV-Leistung hochgerechnet. Dadurch entstehen keine künstlich falschen Energiezählerstände.
+Lange Datenlücken werden bewusst nicht mit der zuletzt bekannten PV-Leistung hochgerechnet. Dadurch entstehen keine künstlichen PV-Energiezählerstände.
 
-## 16. Sicherheit
+## 15. Sicherheit
 
-Nicht ins Internet weiterleiten:
+Nicht direkt ins Internet weiterleiten:
 
 ```text
 502   Victron Modbus TCP
@@ -352,12 +329,12 @@ Nicht ins Internet weiterleiten:
 8504  EOS Dashboard
 ```
 
-Für externen Zugriff besser VPN oder einen korrekt abgesicherten HTTPS-Reverse-Proxy verwenden.
+Für externen Zugriff VPN oder einen korrekt abgesicherten HTTPS-Reverse-Proxy verwenden.
 
-Am Cerbo, wenn möglich:
+Wenn Venus OS die Option anbietet:
 
 ```text
 Modbus TCP -> Access permissions -> Read-only
 ```
 
-Damit bleibt diese erste Ausbaustufe eine lokale, lesende Mess- und Prognoselösung.
+Die aktuelle Victron-Integration bleibt damit eine lokale, lesende Mess- und Prognoselösung.
