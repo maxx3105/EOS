@@ -70,6 +70,11 @@ Compose setup. It can run the 15-minute Open-Meteo/PVLib forecast and use measur
 production to correct the near-term forecast without requiring Home Assistant, Node-RED or MQTT.
 The `PVForecastPVLibVictron` provider aligns feedback to the latest completed 15-minute slot.
 
+For Synology, only the supplied Compose file is needed. Container Manager pulls the pre-built
+`ghcr.io/maxx3105/eos-victron:latest` image; site coordinates, Cerbo GX address and the first PV
+plane are configured afterwards in the browser at EOSdash. No `synology.env`, Git checkout or local
+Docker build is required for the normal installation.
+
 See the step-by-step German guide: **[EOS + Victron Cerbo GX auf Synology DS920+](SYNOLOGY_VICTRON.md)**.
 
 ## System Requirements
