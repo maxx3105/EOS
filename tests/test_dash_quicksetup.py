@@ -1,7 +1,11 @@
 """Regression checks for the Synology/Victron browser quick setup."""
 
 from akkudoktoreos.server.dash.about import _SETUP_SCRIPT
-from akkudoktoreos.server.dash.quicksetup import build_quick_setup_updates, quick_setup_state
+from akkudoktoreos.server.dash.quicksetup import (
+    build_quick_setup_updates,
+    build_victron_48v_planes,
+    quick_setup_state,
+)
 
 
 def test_quick_setup_uses_actual_provider_config_paths():
@@ -19,24 +23,43 @@ def test_quick_setup_enables_read_only_victron_prediction_stack():
         '["adapter.provider", ["Victron"]]',
         '["adapter.victron.port", 502]',
         '["adapter.victron.unit_id", 100]',
-        '["adapter.victron.include_ac_coupled_pv", true]',
+        '["adapter.victron.include_ac_coupled_pv", false]',
         '["prediction.hours", 48]',
     )
     for fragment in expected:
         assert fragment in _SETUP_SCRIPT
 
 
-def test_quick_setup_configures_a_pvlib_plane():
-    """A simple single-plane setup must include all PVLib mandatory fields."""
-    for field in (
-        "surface_tilt",
-        "surface_azimuth",
-        "module_model",
-        "inverter_model",
-        "modules_per_string",
-        "strings_per_inverter",
-    ):
-        assert field in _SETUP_SCRIPT
+def test_victron_48v_profile_matches_installed_pv_groups():
+    planes = build_victron_48v_planes(tilt=25, south_azimuth=180, north_azimuth=0)
+
+    assert len(planes) == 4
+    assert sum(plane["peakpower"] for plane in planes) == 21.79
+
+    # Two south 250/100 controllers: 3 x 5 LONGi 435 W each.
+    for plane in planes[:2]:
+        assert plane["surface_tilt"] == 25
+        assert plane["surface_azimuth"] == 180
+        assert plane["module_model"] == "435.0"
+        assert plane["modules_per_string"] == 5
+        assert plane["strings_per_inverter"] == 3
+        assert plane["inverter_model"] == "5800"
+        assert plane["peakpower"] == 6.525
+
+    # South 250/60: 1 x 4 LONGi 435 W.
+    assert planes[2]["module_model"] == "435.0"
+    assert planes[2]["modules_per_string"] == 4
+    assert planes[2]["strings_per_inverter"] == 1
+    assert planes[2]["inverter_model"] == "3440"
+    assert planes[2]["peakpower"] == 1.74
+
+    # North 250/100: 5 x 5 Peimar 280 W.
+    assert planes[3]["surface_azimuth"] == 0
+    assert planes[3]["module_model"] == "280.0"
+    assert planes[3]["modules_per_string"] == 5
+    assert planes[3]["strings_per_inverter"] == 5
+    assert planes[3]["inverter_model"] == "5800"
+    assert planes[3]["peakpower"] == 7.0
 
 
 def test_quick_setup_requires_confirmed_file_save():
@@ -48,46 +71,39 @@ def test_quick_setup_requires_confirmed_file_save():
 
 def test_quick_setup_builds_valid_rest_paths():
     payload = {
-        "latitude": 48.1,
-        "longitude": 16.2,
-        "cerbo_host": "192.168.178.20",
-        "tilt": 30,
-        "azimuth": 180,
-        "module_power": 425,
-        "modules_per_string": 12,
-        "strings_per_inverter": 2,
-        "inverter_power": 10000,
+        "latitude": 47.4374,
+        "longitude": 15.0036,
+        "cerbo_host": "192.168.178.150",
+        "tilt": 25,
+        "south_azimuth": 180,
+        "north_azimuth": 0,
     }
     updates = dict(build_quick_setup_updates(payload))
 
-    assert updates["general/latitude"] == 48.1
+    assert updates["general/latitude"] == 47.4374
     assert updates["weather/provider"] == "OpenMeteo"
     assert updates["pvforecast/provider"] == "PVForecastPVLibVictron"
-    assert updates["adapter/victron/host"] == "192.168.178.20"
+    assert updates["adapter/victron/host"] == "192.168.178.150"
+    assert updates["adapter/victron/include_ac_coupled_pv"] is False
     assert updates["ems/mode"] == "PREDICTION"
-    assert updates["pvforecast/planes"][0]["module_model"] == "425.0"
+    assert len(updates["pvforecast/planes"]) == 4
+    assert sum(plane["peakpower"] for plane in updates["pvforecast/planes"]) == 21.79
 
 
-def test_quick_setup_reads_saved_values_back():
+def test_quick_setup_reads_saved_profile_back():
+    planes = build_victron_48v_planes(tilt=25, south_azimuth=180, north_azimuth=0)
     config = {
-        "general": {"latitude": 48.1, "longitude": 16.2},
-        "adapter": {"victron": {"host": "192.168.178.20"}},
-        "pvforecast": {
-            "planes": [
-                {
-                    "surface_tilt": 30.0,
-                    "surface_azimuth": 180.0,
-                    "module_model": "425",
-                    "inverter_model": "10000",
-                    "modules_per_string": 12,
-                    "strings_per_inverter": 2,
-                }
-            ]
-        },
+        "general": {"latitude": 47.4374, "longitude": 15.0036},
+        "adapter": {"victron": {"host": "192.168.178.150"}},
+        "pvforecast": {"planes": planes},
     }
 
     state = quick_setup_state(config)
     assert state["configured"] is True
-    assert state["cerbo_host"] == "192.168.178.20"
-    assert state["module_power"] == 425.0
-    assert state["inverter_power"] == 10000.0
+    assert state["cerbo_host"] == "192.168.178.150"
+    assert state["tilt"] == 25
+    assert state["south_azimuth"] == 180
+    assert state["north_azimuth"] == 0
+    assert state["plane_count"] == 4
+    assert state["total_peakpower"] == 21.79
+    assert state["profile_active"] is True
