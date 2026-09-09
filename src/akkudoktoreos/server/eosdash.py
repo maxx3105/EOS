@@ -5,8 +5,9 @@ import traceback
 from pathlib import Path
 
 import psutil
+import requests
 import uvicorn
-from fasthtml.common import Base, FileResponse, JSONResponse
+from fasthtml.common import Base, Div, FileResponse, H2, JSONResponse, P
 from loguru import logger
 from monsterui.core import FastHTML, Theme
 from starlette.middleware import Middleware
@@ -222,6 +223,32 @@ def eos_server() -> tuple[str, int]:
     return config_eosdash["eos_host"], config_eosdash["eos_port"]
 
 
+def _current_ems_mode() -> str | None:
+    """Read the effective EMS mode from the running EOS server."""
+    eos_host, eos_port = eos_server()
+    host = "127.0.0.1" if eos_host in {"0.0.0.0", "::"} else eos_host
+    try:
+        response = requests.get(f"http://{host}:{eos_port}/v1/config", timeout=5)
+        response.raise_for_status()
+        mode = response.json().get("ems", {}).get("mode")
+        return str(mode) if mode is not None else None
+    except Exception:
+        return None
+
+
+def _plan_unavailable() -> Div:
+    return Div(
+        H2("Plan ist im Prognosemodus deaktiviert"),
+        P(
+            "Deine Synology-/Victron-Installation läuft absichtlich im Modus PREDICTION. "
+            "Dabei erstellt EOS Wetter- und PV-Prognosen und korrigiert sie mit den Cerbo-Istwerten, "
+            "führt aber keine Batterie-/Verbrauchsoptimierung aus. Deshalb gibt es noch keinen Optimierungsplan."
+        ),
+        P("Die PV-Prognose findest du unter „Prediction“."),
+        cls="border rounded-lg p-5",
+    )
+
+
 # -------------------------------------------------------------------
 # Routes
 # -------------------------------------------------------------------
@@ -252,17 +279,20 @@ def get_eosdash(request: Request):  # type: ignore
     """
     root_path: str = request.scope.get("root_path", "")
 
+    navigation = {
+        "Prediction": "/eosdash/prediction",
+        "Config": "/eosdash/configuration",
+        "Admin": "/eosdash/admin",
+        "About": "/eosdash/about",
+    }
+    if _current_ems_mode() == "OPTIMIZATION":
+        navigation = {"Plan": "/eosdash/plan", **navigation}
+
     return (
         Base(href=f"{root_path}/") if root_path else None,
         Page(
             None,
-            {
-                "Plan": "/eosdash/plan",
-                "Prediction": "/eosdash/prediction",
-                "Config": "/eosdash/configuration",
-                "Admin": "/eosdash/admin",
-                "About": "/eosdash/about",
-            },
+            navigation,
             About(),
             Footer(*eos_server()),
             "/eosdash/footer",
@@ -332,7 +362,7 @@ def get_eosdash_configuration_options(  # type: ignore
     name: str = "",
     current: str = "",
 ):
-    """Serve a filtered <select> fragment for a select_lazy config field."""
+    """Serve a filtered, capped <select> fragment for a select_lazy config field."""
     return config_options(options_source, search, select_id, name, current)
 
 
@@ -379,29 +409,17 @@ def post_eosdash_configuration(request: Request, data: dict):  # type: ignore
 
 @app.get("/eosdash/plan")
 def get_eosdash_plan(request: Request, data: dict):  # type: ignore
-    """Serve the EOSdash Plan page.
-
-    Args:
-        request (Request): The incoming FastHTML request.
-        data (dict): Optional query data.
-
-    Returns:
-        Plan: The Plan page component.
-    """
+    """Serve the EOSdash Plan page."""
+    if _current_ems_mode() != "OPTIMIZATION":
+        return _plan_unavailable()
     return Plan(*eos_server(), data)
 
 
 @app.post("/eosdash/plan")
 def post_eosdash_plan(request: Request, data: dict):  # type: ignore
-    """Provide control data to the Plan page.
-
-    Args:
-        request (Request): The incoming FastHTML request.
-        data (dict): User-submitted data from the Plan page.
-
-    Returns:
-        Plan: The Plan page component.
-    """
+    """Provide control data to the Plan page."""
+    if _current_ems_mode() != "OPTIMIZATION":
+        return _plan_unavailable()
     return Plan(*eos_server(), data)
 
 
@@ -527,7 +545,7 @@ def main() -> None:
     """Parse command-line arguments and start the EOSdash server with the specified options.
 
     This function sets up the argument parser to accept command-line arguments for
-    host, port, log_level, access_log, and reload. It uses default values from the
+    host, port, log_level, access log, and reload. It uses default values from the
     config module if arguments are not provided. After parsing the arguments,
     it starts the EOSdash server with the specified configurations.
 
