@@ -41,9 +41,15 @@ class Inverter:
 
         # The Synology/Victron deployment is operated without permission for grid feed-in.
         # Keep this deployment-specific instead of changing generic EOS behaviour globally.
-        # The real plant must still enforce zero feed-in in Victron ESS itself; this flag only
-        # makes the optimizer/simulation obey the same physical/legal boundary.
-        self.zero_feed_in = _env_flag("EOS_VICTRON_ZERO_FEED_IN")
+        # Existing NAS projects already carry this dedicated session key, so they pick up the
+        # zero-feed-in boundary from updated main source code without requiring a YAML edit.
+        # The explicit EOS_VICTRON_ZERO_FEED_IN flag still overrides the profile default.
+        synology_victron_profile = (
+            os.getenv("EOS_SERVER__EOSDASH_SESSKEY") == "eos-victron-synology-local-session"
+        )
+        self.zero_feed_in = _env_flag(
+            "EOS_VICTRON_ZERO_FEED_IN", default=synology_victron_profile
+        )
 
     def process_energy(
         self, generation: float, consumption: float, hour: int
