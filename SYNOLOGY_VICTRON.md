@@ -4,8 +4,6 @@ Diese Anleitung beschreibt den einfachen Standardweg für den Fork `maxx3105/EOS
 
 Die Synology benötigt nur **eine Compose-Datei**. Es werden **kein Git, kein SSH, keine GitHub Actions, kein eigenes Container-Registry-Image und keine ENV-Datei** benötigt.
 
-Der Ablauf ist:
-
 ```text
 1 Datei: docker-compose.yml
         ↓
@@ -15,7 +13,9 @@ Container Manager → Projekt → Erstellen
         ↓
 aktueller Fork-Quellcode aus main wird automatisch eingespielt
         ↓
-http://NAS-IP:8504 öffnen
+Docker legt den persistenten Datenspeicher selbst an
+        ↓
+http://NAS-IP:18504 öffnen
         ↓
 Standort + Cerbo + PV-Anlage im Browser einrichten
 ```
@@ -48,23 +48,28 @@ Danach:
 
 Standard-Port ist TCP `502`.
 
-## 2. Ordner auf der Synology anlegen
+## 2. Projektordner auf der Synology
 
-In **File Station**:
+In **File Station** nur diesen Ordner anlegen:
 
 ```text
 /volume1/docker/eos-victron
 ```
 
-In diesen Ordner kommt nur:
+Dort liegt lediglich:
 
 ```text
 /volume1/docker/eos-victron/
-├── docker-compose.yml
-└── synology-data/
+└── docker-compose.yml
 ```
 
-`synology-data` enthält später die persistente EOS-Konfiguration und Messhistorie.
+Ein zusätzlicher Datenordner muss **nicht** manuell angelegt werden. Container Manager erzeugt automatisch das Docker-Volume:
+
+```text
+eos-victron-data
+```
+
+Darin liegen die persistenten EOS-Daten unter `/data`.
 
 ## 3. Compose-Datei herunterladen
 
@@ -80,30 +85,22 @@ oder die identische Datei:
 docker-compose.synology.yaml
 ```
 
-Auf der NAS als
+Auf der NAS als `docker-compose.yml` speichern.
 
-```text
-docker-compose.yml
-```
-
-speichern.
-
-Die aktuelle Datei enthält unter anderem:
+Die aktuelle Datei verwendet:
 
 ```yaml
-services:
-  eos:
-    image: akkudoktor/eos:latest
-    entrypoint: ["/bin/sh", "-c"]
+image: akkudoktor/eos:latest
 ```
 
-Sie lädt beim Containerstart automatisch den aktuellen Fork-Quellcode aus:
+und lädt beim Containerstart automatisch den aktuellen Fork-Quellcode aus `main`. Dadurch wird auf der Synology kein `git` benötigt.
 
-```text
-https://github.com/maxx3105/EOS/archive/refs/heads/main.tar.gz
+Die Daten werden über ein Docker-Volume eingebunden:
+
+```yaml
+volumes:
+  - eos-victron-data:/data
 ```
-
-Dadurch wird auf der Synology **kein git-Programm** benötigt.
 
 ## 4. Projekt im Container Manager erstellen
 
@@ -126,50 +123,26 @@ Als Compose-Datei die dort liegende `docker-compose.yml` verwenden.
 
 Projekt erstellen und starten.
 
-Beim ersten Start sollte Container Manager zuerst das öffentliche Image
-
-```text
-akkudoktor/eos:latest
-```
-
-laden. Danach erscheint im Container-Protokoll sinngemäß:
+Beim ersten Start lädt Container Manager zunächst `akkudoktor/eos:latest`. Danach sollte im Container-Protokoll erscheinen:
 
 ```text
 EOS Victron: lade aktuellen Fork-Stand von main ...
 EOS Victron: Fork-Quellcode erfolgreich geladen.
 ```
 
-## 5. Alte Compose-Dateien erkennen
+## 5. EOS öffnen
 
-Wenn stattdessen im Terminal steht:
+Standardmäßig verwendet die Synology-Variante bewusst die Host-Ports `18503` und `18504`, um Kollisionen mit anderen Diensten zu vermeiden.
 
-```text
-pull access denied for maxx3105/eos
-```
-
-wird noch eine alte Compose-Datei verwendet.
-
-Wenn dort steht:
+Wenn die NAS z. B. `192.168.178.93` hat:
 
 ```text
-unable to find 'git': exec: "git": executable file not found
+Dashboard: http://192.168.178.93:18504
+API:       http://192.168.178.93:18503
+API-Doku:  http://192.168.178.93:18503/docs
 ```
 
-wird ebenfalls noch die ältere Git-Build-Variante verwendet.
-
-In beiden Fällen im Projekt unter **YAML-Konfiguration** den Inhalt durch die aktuelle `docker-compose.yml` aus `main` ersetzen, speichern und das Projekt neu erstellen.
-
-## 6. EOS öffnen
-
-Wenn die NAS zum Beispiel `192.168.1.20` hat:
-
-```text
-Dashboard: http://192.168.1.20:8504
-API:       http://192.168.1.20:8503
-API-Doku:  http://192.168.1.20:8503/docs
-```
-
-## 7. Browser-Schnelleinrichtung
+## 6. Browser-Schnelleinrichtung
 
 Auf der Startseite befindet sich die **Schnelleinrichtung: Synology + Victron Cerbo GX**.
 
@@ -209,37 +182,29 @@ Cerbo-Unit-ID:        100
 PV-Istwertkorrektur:  aktiv
 ```
 
-## 8. Mehrere Dachflächen
+## 7. Mehrere Dachflächen
 
 Die Schnelleinrichtung legt zunächst eine PV-Fläche an. Für Ost/West-Anlagen oder mehrere Wechselrichter können anschließend unter **Config** weitere `pvforecast.planes` ergänzt werden.
 
-## 9. Update
+## 8. Update
 
-Für ein Update genügt es, das Projekt neu zu erstellen bzw. den Container neu zu erzeugen. Beim Start wird der aktuelle Quellcode von `main` erneut geladen.
+Projekt im Container Manager neu erstellen. Beim Start wird der aktuelle Quellcode von `main` erneut geladen.
 
-Der Ordner
-
-```text
-/volume1/docker/eos-victron/synology-data/
-```
-
-darf dabei nicht gelöscht werden.
-
-## 10. Backup
-
-In **Hyper Backup** mindestens sichern:
+Das Docker-Volume
 
 ```text
-/volume1/docker/eos-victron/synology-data/
+eos-victron-data
 ```
 
-Optional zusätzlich:
+nicht löschen. Darin bleiben Konfiguration und Messhistorie erhalten.
 
-```text
-/volume1/docker/eos-victron/docker-compose.yml
-```
+## 9. Backup
 
-## 11. Fehlerbehebung
+Für ein vollständiges Backup müssen die Daten aus dem Docker-Volume `eos-victron-data` gesichert werden. Die Compose-Datei zusätzlich sichern.
+
+Wichtig: Beim Löschen oder Zurücksetzen des Projekts **nicht** die Option wählen, die zugehörige Volumes löscht.
+
+## 10. Fehlerbehebung
 
 ### `pull access denied for maxx3105/eos`
 
@@ -247,26 +212,15 @@ Alte Compose-Datei aktiv. Aktuelle YAML aus `main` übernehmen.
 
 ### `unable to find 'git'`
 
-Alte Git-Build-Compose aktiv. Aktuelle YAML aus `main` übernehmen; sie benötigt kein Git.
+Alte Git-Build-Compose aktiv. Aktuelle YAML aus `main` übernehmen.
 
-### `EOS Victron: lade aktuellen Fork-Stand ...` schlägt fehl
+### `Bind mount failed ... synology-data`
 
-Prüfen:
+Alte Compose-Datei mit einem lokalen Ordner-Mount aktiv. Die aktuelle Version verwendet stattdessen das automatisch angelegte Docker-Volume `eos-victron-data`.
 
-- NAS hat Internetzugriff
-- DNS funktioniert
-- `github.com` ist erreichbar
+### `driver failed programming external connectivity`
 
-### Dashboard nicht erreichbar
-
-Prüfen:
-
-- Container läuft?
-- Port `8504` veröffentlicht?
-- NAS-Firewall erlaubt Port `8504`?
-- Port `8504` bereits belegt?
-
-Bei einer Portkollision in `docker-compose.yml` ändern:
+Meist ist ein Host-Port belegt. Die aktuelle Synology-Datei verwendet deshalb bereits:
 
 ```yaml
 ports:
@@ -274,7 +228,13 @@ ports:
   - "18504:8504"
 ```
 
-Dann ist das Dashboard unter `http://NAS-IP:18504` erreichbar.
+### Fork-Download schlägt fehl
+
+Prüfen:
+
+- NAS hat Internetzugriff
+- DNS funktioniert
+- `github.com` ist erreichbar
 
 ### Cerbo nicht erreichbar
 
@@ -291,14 +251,14 @@ Prüfen:
 
 Direkt nach dem ersten Start fehlen zunächst historische Cerbo-Messungen. EOS verwendet vorübergehend die reine PVLib-Prognose. Sobald genügend aktuelle Messwerte vorhanden sind, wird die Istwertkorrektur automatisch wirksam.
 
-## 12. Sicherheit
+## 11. Sicherheit
 
 Nicht direkt ins Internet weiterleiten:
 
 ```text
-502   Victron Modbus TCP
-8503  EOS API
-8504  EOS Dashboard
+502    Victron Modbus TCP
+18503  EOS API
+18504  EOS Dashboard
 ```
 
 Für externen Zugriff besser VPN oder einen abgesicherten HTTPS-Reverse-Proxy verwenden.
