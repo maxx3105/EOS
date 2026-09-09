@@ -6,6 +6,12 @@ from typing import Any
 
 
 VICTRON_48V_PROFILE_NAME = "48V / 3x MultiPlus-II 10000 / 4x MPPT"
+PYLONTECH_PROFILE_NAME = "4x US5000 + 1x US3000C + 7x US2000C"
+PYLONTECH_CAPACITY_WH = 39_552
+PYLONTECH_USABLE_95_DOD_WH = 37_574
+MULTIPLUS_CONTINUOUS_POWER_W = 8_000
+MULTIPLUS_COUNT = 3
+MULTIPLUS_CHARGE_POWER_W = 7_350
 
 
 def _number(payload: dict[str, Any], key: str, label: str) -> float:
@@ -25,13 +31,7 @@ def _validate_azimuth(value: float, label: str) -> float:
 def build_victron_48v_planes(
     *, tilt: float = 25.0, south_azimuth: float = 180.0, north_azimuth: float = 0.0
 ) -> list[dict[str, Any]]:
-    """Build the four DC-coupled PV groups of the configured Victron installation.
-
-    The numeric ``inverter_model`` values deliberately select a CEC inverter model close
-    to the 48 V MPPT nominal output. PVLib therefore models each MPPT group independently
-    and clips it close to the charge-controller limit while EOS still exposes the summed
-    result through its normal ``pvforecast_ac_power`` series.
-    """
+    """Build the four DC-coupled PV groups of the configured Victron installation."""
     if not 0 <= tilt <= 90:
         raise ValueError("Modulneigung muss zwischen 0 und 90° liegen.")
     south_azimuth = _validate_azimuth(south_azimuth, "Süd-Azimut")
@@ -59,13 +59,45 @@ def build_victron_48v_planes(
         }
 
     return [
-        # South: two SmartSolar MPPT 250/100, each with 3 strings x 5 LONGi 435 W.
         plane(south_azimuth, 435.0, 5, 3, 5800),
         plane(south_azimuth, 435.0, 5, 3, 5800),
-        # South: one SmartSolar MPPT 250/60 with 1 string x 4 LONGi 435 W.
         plane(south_azimuth, 435.0, 4, 1, 3440),
-        # North: one SmartSolar MPPT 250/100 with 5 strings x 5 Peimar 280 W.
         plane(north_azimuth, 280.0, 5, 5, 5800),
+    ]
+
+
+def build_pylontech_battery(min_soc_percentage: int = 10) -> dict[str, Any]:
+    """Build the aggregate Pylontech battery bank used by the three-phase Victron system."""
+    if not 0 <= min_soc_percentage <= 100:
+        raise ValueError("Mindest-SOC muss zwischen 0 und 100 % liegen.")
+    return {
+        "device_id": "battery1",
+        "capacity_wh": PYLONTECH_CAPACITY_WH,
+        # Keep cell/storage losses neutral here; MultiPlus conversion efficiency is modeled
+        # separately on the inverter devices to avoid counting conversion losses twice.
+        "charging_efficiency": 1.0,
+        "discharging_efficiency": 1.0,
+        # The legacy genetic battery model uses this as both charge and discharge ceiling.
+        # 24 kW matches the three MultiPlus-II 10k units' continuous real-power capability.
+        "max_charge_power_w": MULTIPLUS_CONTINUOUS_POWER_W * MULTIPLUS_COUNT,
+        "min_charge_power_w": 50,
+        "min_soc_percentage": min_soc_percentage,
+        "max_soc_percentage": 100,
+    }
+
+
+def build_multiplus_inverters() -> list[dict[str, Any]]:
+    """Build the three phase MultiPlus-II 48/10000/140-100 devices."""
+    return [
+        {
+            "device_id": f"multiplus-l{phase}",
+            "max_power_w": MULTIPLUS_CONTINUOUS_POWER_W,
+            "battery_id": "battery1",
+            "ac_to_dc_efficiency": 0.95,
+            "dc_to_ac_efficiency": 0.95,
+            "max_ac_charge_power_w": MULTIPLUS_CHARGE_POWER_W,
+        }
+        for phase in (1, 2, 3)
     ]
 
 
@@ -85,6 +117,7 @@ def build_quick_setup_updates(payload: dict[str, Any]) -> list[tuple[str, Any]]:
     tilt = _number(payload, "tilt", "Modulneigung")
     south_azimuth = _number(payload, "south_azimuth", "Süd-Azimut")
     north_azimuth = _number(payload, "north_azimuth", "Nord-Azimut")
+    min_soc = int(_number(payload, "min_soc", "Mindest-SOC"))
     planes = build_victron_48v_planes(
         tilt=tilt,
         south_azimuth=south_azimuth,
@@ -105,10 +138,13 @@ def build_quick_setup_updates(payload: dict[str, Any]) -> list[tuple[str, Any]]:
         ("adapter/victron/port", 502),
         ("adapter/victron/unit_id", 100),
         ("adapter/victron/timeout_sec", 3.0),
-        # This installation is fully DC-coupled through SmartSolar MPPTs.
         ("adapter/victron/include_ac_coupled_pv", False),
         ("adapter/victron/pv_energy_key", "victron_pv_emr"),
         ("adapter/victron/max_integration_gap_minutes", 15.0),
+        ("devices/max_batteries", 1),
+        ("devices/batteries", [build_pylontech_battery(min_soc)]),
+        ("devices/max_inverters", 3),
+        ("devices/inverters", build_multiplus_inverters()),
     ]
 
 
@@ -135,6 +171,13 @@ def quick_setup_state(config: dict[str, Any]) -> dict[str, Any]:
         except (TypeError, ValueError):
             pass
 
+    batteries = _nested(config, "devices", "batteries")
+    battery = batteries[0] if isinstance(batteries, list) and batteries else {}
+    inverters = _nested(config, "devices", "inverters")
+    inverter_count = len(inverters) if isinstance(inverters, list) else 0
+    battery_capacity = battery.get("capacity_wh") if isinstance(battery, dict) else None
+    min_soc = battery.get("min_soc_percentage") if isinstance(battery, dict) else None
+
     return {
         "latitude": _nested(config, "general", "latitude"),
         "longitude": _nested(config, "general", "longitude"),
@@ -145,5 +188,8 @@ def quick_setup_state(config: dict[str, Any]) -> dict[str, Any]:
         "plane_count": len(valid_planes),
         "total_peakpower": round(total_peakpower, 3),
         "profile_active": len(valid_planes) == 4 and abs(total_peakpower - 21.79) < 0.05,
+        "battery_capacity_wh": battery_capacity,
+        "min_soc": min_soc,
+        "battery_profile_active": battery_capacity == PYLONTECH_CAPACITY_WH and inverter_count == 3,
         "configured": bool(_nested(config, "adapter", "victron", "host")),
     }
