@@ -66,4 +66,8 @@ services:
       - "18504:8504"
 
     volumes:
-      - ./synology-data:/data:rw
+      - eos-victron-data:/data
+
+volumes:
+  eos-victron-data:
+    name: eos-victron-data
