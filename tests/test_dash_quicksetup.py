@@ -1,5 +1,7 @@
 """Regression checks for the Synology/Victron browser quick setup."""
 
+import pytest
+
 from akkudoktoreos.server.dash.about import _SETUP_SCRIPT
 from akkudoktoreos.server.dash.quicksetup import (
     build_quick_setup_updates,
@@ -34,7 +36,7 @@ def test_victron_48v_profile_matches_installed_pv_groups():
     planes = build_victron_48v_planes(tilt=25, south_azimuth=180, north_azimuth=0)
 
     assert len(planes) == 4
-    assert sum(plane["peakpower"] for plane in planes) == 21.79
+    assert sum(plane["peakpower"] for plane in planes) == pytest.approx(21.79)
 
     # Two south 250/100 controllers: 3 x 5 LONGi 435 W each.
     for plane in planes[:2]:
@@ -44,14 +46,14 @@ def test_victron_48v_profile_matches_installed_pv_groups():
         assert plane["modules_per_string"] == 5
         assert plane["strings_per_inverter"] == 3
         assert plane["inverter_model"] == "5800"
-        assert plane["peakpower"] == 6.525
+        assert plane["peakpower"] == pytest.approx(6.525)
 
     # South 250/60: 1 x 4 LONGi 435 W.
     assert planes[2]["module_model"] == "435.0"
     assert planes[2]["modules_per_string"] == 4
     assert planes[2]["strings_per_inverter"] == 1
     assert planes[2]["inverter_model"] == "3440"
-    assert planes[2]["peakpower"] == 1.74
+    assert planes[2]["peakpower"] == pytest.approx(1.74)
 
     # North 250/100: 5 x 5 Peimar 280 W.
     assert planes[3]["surface_azimuth"] == 0
@@ -59,7 +61,7 @@ def test_victron_48v_profile_matches_installed_pv_groups():
     assert planes[3]["modules_per_string"] == 5
     assert planes[3]["strings_per_inverter"] == 5
     assert planes[3]["inverter_model"] == "5800"
-    assert planes[3]["peakpower"] == 7.0
+    assert planes[3]["peakpower"] == pytest.approx(7.0)
 
 
 def test_quick_setup_requires_confirmed_file_save():
@@ -87,7 +89,9 @@ def test_quick_setup_builds_valid_rest_paths():
     assert updates["adapter/victron/include_ac_coupled_pv"] is False
     assert updates["ems/mode"] == "PREDICTION"
     assert len(updates["pvforecast/planes"]) == 4
-    assert sum(plane["peakpower"] for plane in updates["pvforecast/planes"]) == 21.79
+    assert sum(plane["peakpower"] for plane in updates["pvforecast/planes"]) == pytest.approx(
+        21.79
+    )
 
 
 def test_quick_setup_reads_saved_profile_back():
@@ -105,5 +109,5 @@ def test_quick_setup_reads_saved_profile_back():
     assert state["south_azimuth"] == 180
     assert state["north_azimuth"] == 0
     assert state["plane_count"] == 4
-    assert state["total_peakpower"] == 21.79
+    assert state["total_peakpower"] == pytest.approx(21.79)
     assert state["profile_active"] is True
