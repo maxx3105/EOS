@@ -4,7 +4,7 @@ import pandas as pd
 import requests
 from bokeh.models import ColumnDataSource, LinearAxis, Range1d
 from bokeh.plotting import figure
-from monsterui.franken import FT, Grid, P
+from monsterui.franken import Div, FT, Grid, P
 
 from akkudoktoreos.core.pydantic import PydanticDateTimeSeries
 from akkudoktoreos.server.dash.bokeh import Bokeh, bokey_apply_theme_to_plot
@@ -201,7 +201,17 @@ def LoadForecast(predictions: pd.DataFrame, config: dict, date_time_tz: str, dar
     return Bokeh(plot)
 
 
-def Prediction(eos_host: str, eos_port: Union[str, int], data: Optional[dict] = None) -> str:
+def _has_columns(predictions: pd.DataFrame, *columns: str) -> bool:
+    return all(column in predictions.columns for column in columns)
+
+
+def Prediction(eos_host: str, eos_port: Union[str, int], data: Optional[dict] = None) -> Div:
+    """Render all prediction data that is actually available.
+
+    Electricity-price and load forecasts are optional for the Synology/Victron
+    prediction-only setup. Missing optional prediction keys therefore no longer
+    make the complete prediction dashboard fail.
+    """
     server = f"http://{eos_host}:{eos_port}"
 
     dark = False
@@ -214,12 +224,13 @@ def Prediction(eos_host: str, eos_port: Union[str, int], data: Optional[dict] = 
     try:
         result = requests.get(f"{server}/v1/config", timeout=10)
         result.raise_for_status()
-    except requests.exceptions.HTTPError as err:
-        detail = result.json()["detail"]
-        return P(
-            f"Can not retrieve configuration from {server}: {err}, {detail}",
-            cls="text-center",
-        )
+    except requests.exceptions.RequestException as err:
+        detail = ""
+        try:
+            detail = result.json().get("detail", "")
+        except Exception:
+            pass
+        return Div(Error(f"Can not retrieve configuration from {server}: {err}, {detail}"))
     config = result.json()
 
     # ---------------------------------------------------------------------
@@ -239,39 +250,45 @@ def Prediction(eos_host: str, eos_port: Union[str, int], data: Optional[dict] = 
     ]
 
     # ---------------------------------------------------------------------
-    # Fetch all series
+    # Fetch every series independently. A missing key is optional here.
     # ---------------------------------------------------------------------
     series_list = []
+    missing_keys: list[str] = []
 
-    try:
-        for options in prediction_requests:
-            key = options[0]
-            resample_method = options[1]
-            fill_method = options[2]
+    for key, resample_method, fill_method in prediction_requests:
+        params = {
+            "key": key,
+            "interval": "15 minutes",
+            "processing": "resampled",
+            "resample_method": resample_method,
+            "fill_method": fill_method,
+        }
 
-            params = {
-                "key": key,
-                "interval": "15 minutes",
-                "processing": "resampled",
-                "resample_method": resample_method,
-                "fill_method": fill_method,
-            }
-
+        try:
             result = requests.get(
                 f"{server}/v1/prediction/series",
                 params=params,
                 timeout=10,
             )
+            if result.status_code == 404:
+                missing_keys.append(key)
+                continue
             result.raise_for_status()
-
             series = PydanticDateTimeSeries(**result.json()).to_series().rename(key)
             series_list.append(series)
+        except requests.exceptions.RequestException as err:
+            return Div(Error(f"Can not retrieve prediction '{key}' from {server}: {err}"))
+        except Exception as err:
+            return Div(Error(f"Can not process prediction '{key}' from {server}: {err}"))
 
-    except requests.exceptions.HTTPError as err:
-        detail = result.json()["detail"]
-        return Error(f"Can not retrieve predictions from {server}: {err}, {detail}")
-    except Exception as err:
-        return Error(f"Can not retrieve predictions from {server}: {err}")
+    if not series_list:
+        return Div(
+            P(
+                "Noch keine Prognosedaten vorhanden. EOS sammelt bzw. berechnet die erste Prognose; "
+                "bitte in einigen Minuten erneut öffnen.",
+                cls="p-4 text-center",
+            )
+        )
 
     # ---------------------------------------------------------------------
     # Merge into dataframe
@@ -283,11 +300,39 @@ def Prediction(eos_host: str, eos_port: Union[str, int], data: Optional[dict] = 
     date_time_tz = predictions["date_time"].dt.tz
     predictions["date_time"] = pd.to_datetime(predictions["date_time"]).dt.tz_localize(None)
 
-    return Grid(
-        PVForecast(predictions, config, date_time_tz, dark),
-        ElectricityPriceForecast(predictions, config, date_time_tz, dark),
-        WeatherTempAirHumidityForecast(predictions, config, date_time_tz, dark),
-        WeatherIrradianceForecast(predictions, config, date_time_tz, dark),
-        LoadForecast(predictions, config, date_time_tz, dark),
-        cols_max=2,
+    cards: list[FT] = []
+    if _has_columns(predictions, "pvforecast_ac_power"):
+        cards.append(PVForecast(predictions, config, date_time_tz, dark))
+    if _has_columns(predictions, "weather_temp_air", "weather_relative_humidity"):
+        cards.append(WeatherTempAirHumidityForecast(predictions, config, date_time_tz, dark))
+    if _has_columns(predictions, "weather_ghi", "weather_dni", "weather_dhi"):
+        cards.append(WeatherIrradianceForecast(predictions, config, date_time_tz, dark))
+    if _has_columns(predictions, "elecprice_marketprice_kwh"):
+        cards.append(ElectricityPriceForecast(predictions, config, date_time_tz, dark))
+    if _has_columns(
+        predictions,
+        "loadforecast_power_w",
+        "loadakkudoktor_std_power_w",
+        "loadakkudoktor_mean_power_w",
+    ):
+        cards.append(LoadForecast(predictions, config, date_time_tz, dark))
+
+    notices = []
+    if "elecprice_marketprice_kwh" in missing_keys:
+        notices.append("Strompreisprognose ist nicht konfiguriert.")
+    if any(key.startswith("load") for key in missing_keys):
+        notices.append("Verbrauchsprognose ist nicht konfiguriert.")
+    if "pvforecast_ac_power" in missing_keys:
+        notices.append("Die erste PV-Prognose ist noch nicht verfügbar.")
+
+    info = (
+        P(" ".join(notices), cls="text-sm opacity-70 mb-4")
+        if notices
+        else None
+    )
+
+    return Div(
+        info,
+        Grid(*cards, cols_max=2) if cards else P("Noch keine darstellbaren Prognosedaten vorhanden."),
+        cls="space-y-4",
     )
