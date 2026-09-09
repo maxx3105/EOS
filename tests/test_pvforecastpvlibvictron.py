@@ -83,3 +83,34 @@ def test_alignment_keeps_exact_quarter_hour(config_eos):
     timestamp = to_datetime("2026-06-01T12:30:00+02:00")
     aligned = provider._align_correction_end(timestamp)
     assert aligned == timestamp
+
+
+def test_raw_meter_window_accepts_continuous_real_samples():
+    start = to_datetime("2026-09-09T09:00:00+02:00")
+    end = to_datetime("2026-09-09T10:00:00+02:00")
+    index = pd.date_range(start=pd.Timestamp(start), end=pd.Timestamp(end), freq="5min")
+    series = pd.Series([float(i) / 100.0 for i in range(len(index))], index=index)
+
+    assert PVForecastPVLibVictron._raw_meter_window_is_complete(series, start, end) is True
+
+
+def test_raw_meter_window_rejects_partial_window_after_restart():
+    start = to_datetime("2026-09-09T09:00:00+02:00")
+    end = to_datetime("2026-09-09T10:00:00+02:00")
+    index = pd.date_range(
+        start=pd.Timestamp("2026-09-09T09:48:00+02:00"),
+        end=pd.Timestamp(end),
+        freq="5min",
+    )
+    series = pd.Series([0.0, 0.03, 0.07], index=index)
+
+    assert PVForecastPVLibVictron._raw_meter_window_is_complete(series, start, end) is False
+
+
+def test_raw_meter_window_rejects_counter_reset():
+    start = to_datetime("2026-09-09T09:00:00+02:00")
+    end = to_datetime("2026-09-09T10:00:00+02:00")
+    index = pd.date_range(start=pd.Timestamp(start), end=pd.Timestamp(end), freq="15min")
+    series = pd.Series([3.0, 3.5, 4.0, 0.0, 0.4], index=index)
+
+    assert PVForecastPVLibVictron._raw_meter_window_is_complete(series, start, end) is False
