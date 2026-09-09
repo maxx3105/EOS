@@ -58,6 +58,9 @@ services:
       EOS_SERVER__EOSDASH_HOST: "0.0.0.0"
       EOS_SERVER__EOSDASH_PORT: "8504"
       EOS_SERVER__EOSDASH_SESSKEY: "eos-victron-synology-local-session"
+      # This only constrains EOS prediction/optimization. Actual zero feed-in
+      # must additionally be enforced by the Victron ESS configuration itself.
+      EOS_VICTRON_ZERO_FEED_IN: "1"
 
     restart: unless-stopped
 
