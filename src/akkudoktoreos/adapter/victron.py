@@ -176,7 +176,6 @@ class VictronAdapter(AdapterProvider):
                     raise ConnectionError("Unexpected Modbus unit ID from Cerbo GX")
                 if length < 3:
                     raise ConnectionError("Truncated Modbus response from Cerbo GX")
-
                 pdu = self._recv_exact(sock, length - 1)
         except OSError as exc:
             raise ConnectionError(
@@ -202,8 +201,6 @@ class VictronAdapter(AdapterProvider):
 
     def _read_system_snapshot(self) -> dict[str, Optional[float]]:
         """Read and decode known com.victronenergy.system register ranges."""
-        # Keep requests limited to known contiguous ranges. Requesting a large block
-        # containing an unsupported/reserved register can make the whole Modbus call fail.
         ac_system = self._read_holding_registers(808, 15)  # 808..822
         battery = self._read_holding_registers(842, 2)  # 842..843
         dc_pv = self._read_holding_registers(850, 1)  # 850
@@ -247,6 +244,27 @@ class VictronAdapter(AdapterProvider):
         elif key not in keys:
             self.config.measurement.pv_production_emr_keys = [*keys, key]
         return key
+
+    def _battery_soc_measurement_key(self) -> Optional[str]:
+        """Return the EOS SoC measurement key for the configured aggregate battery."""
+        batteries = self.config.devices.batteries
+        if not batteries:
+            return None
+        return batteries[0].measurement_key_soc_factor
+
+    async def _store_battery_soc(
+        self, sample_time: DateTime, battery_soc_percent: Optional[float]
+    ) -> None:
+        """Store the Cerbo system SoC as EOS battery SoC factor (0..1)."""
+        if battery_soc_percent is None:
+            return
+        if battery_soc_percent < 0.0 or battery_soc_percent > 100.0:
+            logger.warning("Ignoring invalid Victron battery SoC: {} %", battery_soc_percent)
+            return
+        key = self._battery_soc_measurement_key()
+        if key is None:
+            return
+        await self.measurement.update_value(sample_time, key, battery_soc_percent / 100.0)
 
     async def _restore_pv_energy(self, key: str) -> float:
         """Restore the latest generated cumulative PV energy value after a restart."""
@@ -300,6 +318,8 @@ class VictronAdapter(AdapterProvider):
             self.battery_soc_percent = snapshot["battery_soc_percent"]
 
             await self._store_pv_energy(sample_time, self.pv_power_w)
+            await self._store_battery_soc(sample_time, self.battery_soc_percent)
+
             self.connected = True
             self.last_error = None
             self.update_datetime = sample_time
