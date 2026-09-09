@@ -11,6 +11,7 @@ from akkudoktoreos.server.dash.quicksetup import (
     EVCS_MAX_CURRENT_A,
     EVCS_MAX_POWER_W,
     EVCS_PROFILE_NAME,
+    EV_TARGET_SOC_PERCENT,
     PYLONTECH_CAPACITY_WH,
     PYLONTECH_PROFILE_NAME,
     PYLONTECH_USABLE_95_DOD_WH,
@@ -117,7 +118,7 @@ function eosBuildMultiplusInverters() {
     }));
 }
 
-function eosBuildElectricVehicles() {
+function eosBuildElectricVehicles(targetSoc) {
     const chargeRates = [0.0, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0];
     const vehicle = (deviceId, capacityWh) => ({
         device_id: deviceId,
@@ -128,7 +129,7 @@ function eosBuildElectricVehicles() {
         min_charge_power_w: 4100,
         charge_rates: chargeRates,
         min_soc_percentage: 0,
-        max_soc_percentage: 100
+        max_soc_percentage: targetSoc
     });
     return [
         vehicle("renault-r5", 52000),
@@ -159,15 +160,20 @@ async function eosRunQuickSetup() {
         if (southAzimuth < 0 || southAzimuth > 360) throw new Error("Süd-Azimut muss zwischen 0 und 360° liegen.");
         if (northAzimuth < 0 || northAzimuth > 360) throw new Error("Nord-Azimut muss zwischen 0 und 360° liegen.");
 
-        const minSoc = eosSetupNumber("eos-setup-min-soc", "Mindest-SOC");
+        const minSoc = eosSetupNumber("eos-setup-min-soc", "Mindest-SOC / Inselreserve");
         if (!Number.isInteger(minSoc) || minSoc < 0 || minSoc > 100) {
-            throw new Error("Mindest-SOC muss eine ganze Zahl zwischen 0 und 100 % sein.");
+            throw new Error("Inselreserve muss eine ganze Zahl zwischen 0 und 100 % sein.");
+        }
+
+        const evTargetSoc = eosSetupNumber("eos-setup-ev-target-soc", "EV-Ziel-SOC");
+        if (!Number.isInteger(evTargetSoc) || evTargetSoc < 0 || evTargetSoc > 100) {
+            throw new Error("EV-Ziel-SOC muss eine ganze Zahl zwischen 0 und 100 % sein.");
         }
 
         const planes = eosBuildVictron48VPlanes(tilt, southAzimuth, northAzimuth);
         const battery = eosBuildPylontechBattery(minSoc);
         const inverters = eosBuildMultiplusInverters();
-        const electricVehicles = eosBuildElectricVehicles();
+        const electricVehicles = eosBuildElectricVehicles(evTargetSoc);
 
         const updates = [
             ["general.latitude", latitude],
@@ -210,7 +216,7 @@ async function eosRunQuickSetup() {
             throw new Error("Die Werte wurden an EOS übertragen, aber das dauerhafte Schreiben nach /data/config/EOS.config.json konnte nicht bestätigt werden.");
         }
 
-        status.textContent = "✓ Dauerhaft gespeichert: PV + Batterie + 2 EV-Ladepunkte/Fahrzeuge. Die Seite wird neu geladen …";
+        status.textContent = "✓ Dauerhaft gespeichert: PV + Batterie/Inselreserve + EV-Überschussziel. Die Seite wird neu geladen …";
         status.className = "mt-3 text-sm text-green-700 font-semibold";
         document.getElementById("eos-setup-next").style.display = "inline-block";
         setTimeout(() => window.location.reload(), 1200);
@@ -241,7 +247,6 @@ def _field(
     }
     if input_type == "number":
         input_kwargs["step"] = step or "any"
-
     return Div(
         Label(label, fr=input_id, cls="font-semibold block mb-1"),
         Input(**input_kwargs),
@@ -251,13 +256,11 @@ def _field(
 
 
 def _current_quick_setup_state() -> dict[str, Any]:
-    """Read the effective settings from the running EOS server for display."""
     config_eos = get_config()
     host = str(config_eos.server.host or "127.0.0.1")
     if host in {"0.0.0.0", "::"}:
         host = "127.0.0.1"
     port = int(config_eos.server.port or 8503)
-
     try:
         response = requests.get(f"http://{host}:{port}/v1/config", timeout=5)
         response.raise_for_status()
@@ -272,35 +275,20 @@ def _display_value(state: dict[str, Any], key: str, default: str) -> str:
 
 
 def QuickSetup() -> Div:
-    """Simple first-run setup for the Synology + Victron use case."""
     state = _current_quick_setup_state()
     configured = bool(state.get("configured"))
     profile_active = bool(state.get("profile_active"))
     battery_profile_active = bool(state.get("battery_profile_active"))
     ev_profile_active = bool(state.get("ev_profile_active"))
+    ev_target_soc = _display_value(state, "ev_target_soc", str(EV_TARGET_SOC_PERCENT))
 
     return Div(
         H2("Schnelleinrichtung: Synology + Victron Cerbo GX", cls="text-2xl font-bold mb-2"),
-        P(
-            "Die Felder zeigen die aktuell in EOS gespeicherten Werte. PV, Batterie, MultiPlus und EVs werden als Anlagenprofil verwaltet.",
-            cls="mb-2",
-        ),
-        P(
-            "✓ Gespeicherte Cerbo-Konfiguration erkannt." if configured else "Noch keine Cerbo-Konfiguration gespeichert.",
-            cls="text-sm mb-1 text-green-700 font-semibold" if configured else "text-sm mb-1 opacity-70",
-        ),
-        P(
-            "✓ 4-MPPT-Profil aktiv (21,79 kWp)." if profile_active else "Das 4-MPPT-Profil wird beim nächsten Speichern angewendet.",
-            cls="text-sm mb-1 text-green-700 font-semibold" if profile_active else "text-sm mb-1 opacity-70",
-        ),
-        P(
-            "✓ Pylontech-/MultiPlus-Profil aktiv (39,552 kWh)." if battery_profile_active else "Das Batterie-/MultiPlus-Profil wird beim nächsten Speichern angewendet.",
-            cls="text-sm mb-1 text-green-700 font-semibold" if battery_profile_active else "text-sm mb-1 opacity-70",
-        ),
-        P(
-            "✓ EV-Profil aktiv: R5 52 kWh + Megane E-Tech 60 kWh / 2 × 11 kW." if ev_profile_active else "Das EV-Profil wird beim nächsten Speichern angewendet.",
-            cls="text-sm mb-4 text-green-700 font-semibold" if ev_profile_active else "text-sm mb-4 opacity-70",
-        ),
+        P("PV, Batterie, MultiPlus und EVs werden als Anlagenprofil verwaltet.", cls="mb-2"),
+        P("✓ Gespeicherte Cerbo-Konfiguration erkannt." if configured else "Noch keine Cerbo-Konfiguration gespeichert.", cls="text-sm mb-1 text-green-700 font-semibold" if configured else "text-sm mb-1 opacity-70"),
+        P("✓ 4-MPPT-Profil aktiv (21,79 kWp)." if profile_active else "Das 4-MPPT-Profil wird beim nächsten Speichern angewendet.", cls="text-sm mb-1 text-green-700 font-semibold" if profile_active else "text-sm mb-1 opacity-70"),
+        P("✓ Pylontech-/MultiPlus-Profil aktiv (39,552 kWh)." if battery_profile_active else "Das Batterie-/MultiPlus-Profil wird beim nächsten Speichern angewendet.", cls="text-sm mb-1 text-green-700 font-semibold" if battery_profile_active else "text-sm mb-1 opacity-70"),
+        P(f"✓ EV-Profil aktiv: PV-Überschuss bis {ev_target_soc} %, ohne feste Abfahrtszeit." if ev_profile_active else "Das EV-Profil wird beim nächsten Speichern angewendet.", cls="text-sm mb-4 text-green-700 font-semibold" if ev_profile_active else "text-sm mb-4 opacity-70"),
         Div(
             H2("1. Standort", cls="text-lg font-semibold mb-2"),
             Div(
@@ -312,12 +300,7 @@ def QuickSetup() -> Div:
         ),
         Div(
             H2("2. Cerbo GX", cls="text-lg font-semibold mb-2"),
-            _field(
-                "IP-Adresse oder Hostname",
-                "eos-setup-cerbo",
-                _display_value(state, "cerbo_host", "192.168.178.150"),
-                help_text="Modbus TCP: Port 502, Unit ID 100, möglichst Read-only.",
-            ),
+            _field("IP-Adresse oder Hostname", "eos-setup-cerbo", _display_value(state, "cerbo_host", "192.168.178.150"), help_text="Modbus TCP: Port 502, Unit ID 100, weiterhin read-only."),
             P("System: 48 V · 3 × MultiPlus-II 48/10000/140-100 · PV vollständig DC-gekoppelt.", cls="text-sm opacity-80"),
             cls="border rounded-lg p-4 mb-4",
         ),
@@ -331,72 +314,60 @@ def QuickSetup() -> Div:
                 cls="grid grid-cols-1 md:grid-cols-3 gap-4",
             ),
             Div(
-                P("Süd 1 · MPPT 250/100 · 3 × 5 LONGi LR5-54HTH-435M · 6,525 kWp · 5,8 kW"),
-                P("Süd 2 · MPPT 250/100 · 3 × 5 LONGi LR5-54HTH-435M · 6,525 kWp · 5,8 kW"),
-                P("Süd 3 · MPPT 250/60  · 1 × 4 LONGi LR5-54HTH-435M · 1,740 kWp · 3,44 kW"),
-                P("Nord   · MPPT 250/100 · 5 × 5 Peimar OS280P · 7,000 kWp · 5,8 kW"),
+                P("Süd 1 · MPPT 250/100 · 3 × 5 LONGi 435 W · 6,525 kWp · 5,8 kW"),
+                P("Süd 2 · MPPT 250/100 · 3 × 5 LONGi 435 W · 6,525 kWp · 5,8 kW"),
+                P("Süd 3 · MPPT 250/60 · 1 × 4 LONGi 435 W · 1,740 kWp · 3,44 kW"),
+                P("Nord · MPPT 250/100 · 5 × 5 Peimar 280 W · 7,000 kWp · 5,8 kW"),
                 P("Gesamt: 59 Module · 21,790 kWp", cls="font-semibold mt-2"),
                 cls="border rounded p-3 text-sm space-y-1",
             ),
             cls="border rounded-lg p-4 mb-4",
         ),
         Div(
-            H2("4. Batteriespeicher", cls="text-lg font-semibold mb-2"),
+            H2("4. Batteriespeicher & Inselreserve", cls="text-lg font-semibold mb-2"),
             P(f"Batterieprofil: {PYLONTECH_PROFILE_NAME}", cls="font-semibold mb-2"),
             Div(
-                P("4 × Pylontech US5000 · 4,8 kWh = 19,20 kWh"),
-                P("1 × Pylontech US3000C · 3,552 kWh"),
-                P("7 × Pylontech US2000C · 2,4 kWh = 16,80 kWh"),
-                P(f"Nominal: {PYLONTECH_CAPACITY_WH / 1000:.3f} kWh", cls="font-semibold mt-2"),
+                P("4 × US5000 · 1 × US3000C · 7 × US2000C"),
+                P(f"Nominal: {PYLONTECH_CAPACITY_WH / 1000:.3f} kWh"),
                 P(f"Bei 95 % DoD rechnerisch nutzbar: {PYLONTECH_USABLE_95_DOD_WH / 1000:.3f} kWh"),
-                P("3 × MultiPlus-II: 3 × 8 kW Dauerwirkleistung = 24 kW"),
+                P("3 × MultiPlus-II: zusammen 24 kW Dauerwirkleistung"),
                 cls="border rounded p-3 text-sm space-y-1 mb-3",
             ),
             _field(
-                "Mindest-SOC für spätere Optimierung [%]",
+                "Mindest-SOC / Inselreserve Hausbatterie [%]",
                 "eos-setup-min-soc",
                 _display_value(state, "min_soc", "10"),
                 input_type="number",
                 step="1",
-                help_text="Standard 10 %. Die Cerbo-/Pylontech-BMS-Grenzen bleiben unabhängig davon maßgeblich.",
-            ),
-            P(
-                "EOS bleibt vorerst im Modus PREDICTION und schreibt keine ESS-Sollwerte. Die Batterieparameter werden nur für die spätere Simulation vorbereitet.",
-                cls="text-xs opacity-70",
+                help_text="Bleibt frei einstellbar. EOS ändert keine Cerbo-/BMS-Schutzgrenzen und steuert das ESS noch nicht aktiv.",
             ),
             cls="border rounded-lg p-4 mb-4",
         ),
         Div(
-            H2("5. Elektrofahrzeuge & Ladepunkte", cls="text-lg font-semibold mb-2"),
+            H2("5. Elektrofahrzeuge & PV-Überschussladen", cls="text-lg font-semibold mb-2"),
             P(f"Ladeprofil: {EVCS_PROFILE_NAME}", cls="font-semibold mb-2"),
             Div(
                 P(f"EVCS 1 · 3-phasig · max. {EVCS_MAX_CURRENT_A} A · ca. {EVCS_MAX_POWER_W / 1000:.1f} kW"),
                 P(f"EVCS 2 · 3-phasig · max. {EVCS_MAX_CURRENT_A} A · ca. {EVCS_MAX_POWER_W / 1000:.1f} kW"),
                 P(f"Renault R5 · vorhanden · {RENAULT_R5_CAPACITY_WH / 1000:.0f} kWh"),
                 P(f"Renault Megane E-Tech · vorgesehen · {RENAULT_MEGANE_CAPACITY_WH / 1000:.0f} kWh"),
-                P("Maximal gleichzeitig modelliert: ca. 22 kW Ladeleistung.", cls="font-semibold mt-2"),
-                cls="border rounded p-3 text-sm space-y-1",
+                P("Keine feste Abfahrtszeit: geeignet für wechselnden 4-Schicht-Betrieb.", cls="font-semibold mt-2"),
+                cls="border rounded p-3 text-sm space-y-1 mb-3",
             ),
-            P(
-                "Die Fahrzeuge werden zunächst nur für Prognose und spätere Optimierung hinterlegt. EOS steuert die Victron EV Charging Stations noch nicht und aktiviert kein V2G.",
-                cls="text-xs opacity-70 mt-2",
+            _field(
+                "PV-Überschuss-Ladeziel [%]",
+                "eos-setup-ev-target-soc",
+                ev_target_soc,
+                input_type="number",
+                step="1",
+                help_text="Standard 80 %. Später soll nur bei verfügbarem Überschuss bis zu dieser Grenze geladen werden; keine Deadline wird erzwungen.",
             ),
+            P("Wichtig: Die Victron EVCS liefert Ladeleistung/-energie, aber nicht automatisch den echten Fahrzeug-SOC. Für eine spätere automatische Abschaltung exakt bei 80 % braucht EOS zusätzlich eine verlässliche Fahrzeug-SOC-Quelle oder eine manuelle SOC-Eingabe.", cls="text-xs opacity-70 mt-2"),
+            P("EOS bleibt vorerst PREDICTION/read-only: keine EVCS-Steuerung und kein V2G.", cls="text-xs opacity-70 mt-1"),
             cls="border rounded-lg p-4 mb-4",
         ),
-        Button(
-            "Anlagenprofil dauerhaft speichern",
-            id="eos-setup-save",
-            type="button",
-            onclick="eosRunQuickSetup()",
-            cls="px-5 py-3 rounded bg-green-700 text-white font-semibold cursor-pointer",
-        ),
-        A(
-            "Prognose öffnen",
-            href="/eosdash/prediction",
-            id="eos-setup-next",
-            style="display:inline-block" if configured else "display:none",
-            cls="ml-3 px-5 py-3 rounded border inline-block",
-        ),
+        Button("Anlagenprofil dauerhaft speichern", id="eos-setup-save", type="button", onclick="eosRunQuickSetup()", cls="px-5 py-3 rounded bg-green-700 text-white font-semibold cursor-pointer"),
+        A("Prognose öffnen", href="/eosdash/prediction", id="eos-setup-next", style="display:inline-block" if configured else "display:none", cls="ml-3 px-5 py-3 rounded border inline-block"),
         P("", id="eos-setup-status", cls="mt-3 text-sm"),
         Script(_SETUP_SCRIPT),
         cls="border-2 border-green-700 rounded-xl p-5 mb-8",
