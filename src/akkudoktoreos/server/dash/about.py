@@ -7,7 +7,13 @@ from akkudoktoreos.config.configabc import runtime_environment
 from akkudoktoreos.core.coreabc import get_config
 from akkudoktoreos.core.version import __version__
 from akkudoktoreos.server.dash.markdown import Markdown
-from akkudoktoreos.server.dash.quicksetup import VICTRON_48V_PROFILE_NAME, quick_setup_state
+from akkudoktoreos.server.dash.quicksetup import (
+    PYLONTECH_CAPACITY_WH,
+    PYLONTECH_PROFILE_NAME,
+    PYLONTECH_USABLE_95_DOD_WH,
+    VICTRON_48V_PROFILE_NAME,
+    quick_setup_state,
+)
 
 about_md = f"""![Logo](/eosdash/assets/logo.png)
 
@@ -67,8 +73,6 @@ function eosVictronPlane(tilt, azimuth, modulePower, modulesPerString, strings, 
         trackingtype: 0,
         albedo: 0.2,
         module_model: String(modulePower),
-        // For PVLib the numerical inverter model acts as an output-stage proxy.
-        // The values below are the Victron 48-V MPPT nominal PV powers.
         inverter_model: String(mpptPower),
         modules_per_string: modulesPerString,
         strings_per_inverter: strings
@@ -82,6 +86,30 @@ function eosBuildVictron48VPlanes(tilt, southAzimuth, northAzimuth) {
         eosVictronPlane(tilt, southAzimuth, 435, 4, 1, 3440),
         eosVictronPlane(tilt, northAzimuth, 280, 5, 5, 5800)
     ];
+}
+
+function eosBuildPylontechBattery(minSoc) {
+    return {
+        device_id: "battery1",
+        capacity_wh: 39552,
+        charging_efficiency: 1.0,
+        discharging_efficiency: 1.0,
+        max_charge_power_w: 24000,
+        min_charge_power_w: 50,
+        min_soc_percentage: minSoc,
+        max_soc_percentage: 100
+    };
+}
+
+function eosBuildMultiplusInverters() {
+    return [1, 2, 3].map((phase) => ({
+        device_id: "multiplus-l" + phase,
+        max_power_w: 8000,
+        battery_id: "battery1",
+        ac_to_dc_efficiency: 0.95,
+        dc_to_ac_efficiency: 0.95,
+        max_ac_charge_power_w: 7350
+    }));
 }
 
 async function eosRunQuickSetup() {
@@ -107,7 +135,14 @@ async function eosRunQuickSetup() {
         if (southAzimuth < 0 || southAzimuth > 360) throw new Error("Süd-Azimut muss zwischen 0 und 360° liegen.");
         if (northAzimuth < 0 || northAzimuth > 360) throw new Error("Nord-Azimut muss zwischen 0 und 360° liegen.");
 
+        const minSoc = eosSetupNumber("eos-setup-min-soc", "Mindest-SOC");
+        if (!Number.isInteger(minSoc) || minSoc < 0 || minSoc > 100) {
+            throw new Error("Mindest-SOC muss eine ganze Zahl zwischen 0 und 100 % sein.");
+        }
+
         const planes = eosBuildVictron48VPlanes(tilt, southAzimuth, northAzimuth);
+        const battery = eosBuildPylontechBattery(minSoc);
+        const inverters = eosBuildMultiplusInverters();
 
         const updates = [
             ["general.latitude", latitude],
@@ -125,7 +160,11 @@ async function eosRunQuickSetup() {
             ["adapter.victron.timeout_sec", 3.0],
             ["adapter.victron.include_ac_coupled_pv", false],
             ["adapter.victron.pv_energy_key", "victron_pv_emr"],
-            ["adapter.victron.max_integration_gap_minutes", 15.0]
+            ["adapter.victron.max_integration_gap_minutes", 15.0],
+            ["devices.max_batteries", 1],
+            ["devices.batteries", [battery]],
+            ["devices.max_inverters", 3],
+            ["devices.inverters", inverters]
         ];
 
         for (const [key, value] of updates) {
@@ -144,7 +183,7 @@ async function eosRunQuickSetup() {
             throw new Error("Die Werte wurden an EOS übertragen, aber das dauerhafte Schreiben nach /data/config/EOS.config.json konnte nicht bestätigt werden.");
         }
 
-        status.textContent = "✓ Dauerhaft gespeichert: 4 MPPT-Gruppen / 21,79 kWp. Die Seite wird neu geladen …";
+        status.textContent = "✓ Dauerhaft gespeichert: PV 21,79 kWp + Pylontech 39,552 kWh. Die Seite wird neu geladen …";
         status.className = "mt-3 text-sm text-green-700 font-semibold";
         document.getElementById("eos-setup-next").style.display = "inline-block";
         setTimeout(() => window.location.reload(), 1200);
@@ -210,11 +249,12 @@ def QuickSetup() -> Div:
     state = _current_quick_setup_state()
     configured = bool(state.get("configured"))
     profile_active = bool(state.get("profile_active"))
+    battery_profile_active = bool(state.get("battery_profile_active"))
 
     return Div(
         H2("Schnelleinrichtung: Synology + Victron Cerbo GX", cls="text-2xl font-bold mb-2"),
         P(
-            "Die Felder zeigen die aktuell in EOS gespeicherten Werte. Das PV-Profil bildet die vier vorhandenen Victron-MPPT-Gruppen getrennt ab.",
+            "Die Felder zeigen die aktuell in EOS gespeicherten Werte. PV, Batterie und die drei MultiPlus werden als Anlagenprofil verwaltet.",
             cls="mb-2",
         ),
         P(
@@ -223,7 +263,11 @@ def QuickSetup() -> Div:
         ),
         P(
             "✓ 4-MPPT-Profil aktiv (21,79 kWp)." if profile_active else "Das 4-MPPT-Profil wird beim nächsten Speichern angewendet.",
-            cls="text-sm mb-4 text-green-700 font-semibold" if profile_active else "text-sm mb-4 opacity-70",
+            cls="text-sm mb-1 text-green-700 font-semibold" if profile_active else "text-sm mb-1 opacity-70",
+        ),
+        P(
+            "✓ Pylontech-/MultiPlus-Profil aktiv (39,552 kWh)." if battery_profile_active else "Das Batterie-/MultiPlus-Profil wird beim nächsten Speichern angewendet.",
+            cls="text-sm mb-4 text-green-700 font-semibold" if battery_profile_active else "text-sm mb-4 opacity-70",
         ),
         Div(
             H2("1. Standort", cls="text-lg font-semibold mb-2"),
@@ -242,7 +286,7 @@ def QuickSetup() -> Div:
                 _display_value(state, "cerbo_host", "192.168.178.150"),
                 help_text="Modbus TCP: Port 502, Unit ID 100, möglichst Read-only.",
             ),
-            P("System: 48 V · 3 × MultiPlus-II 10000 · PV vollständig DC-gekoppelt über SmartSolar MPPT.", cls="text-sm opacity-80"),
+            P("System: 48 V · 3 × MultiPlus-II 48/10000/140-100 · PV vollständig DC-gekoppelt.", cls="text-sm opacity-80"),
             cls="border rounded-lg p-4 mb-4",
         ),
         Div(
@@ -255,16 +299,38 @@ def QuickSetup() -> Div:
                 cls="grid grid-cols-1 md:grid-cols-3 gap-4",
             ),
             Div(
-                P("Süd 1 · MPPT 250/100 · 3 × 5 LONGi LR5-54HTH-435M · 6,525 kWp · MPPT-Profil 5,8 kW"),
-                P("Süd 2 · MPPT 250/100 · 3 × 5 LONGi LR5-54HTH-435M · 6,525 kWp · MPPT-Profil 5,8 kW"),
-                P("Süd 3 · MPPT 250/60  · 1 × 4 LONGi LR5-54HTH-435M · 1,740 kWp · MPPT-Profil 3,44 kW"),
-                P("Nord   · MPPT 250/100 · 5 × 5 Peimar OS280P · 7,000 kWp · MPPT-Profil 5,8 kW"),
+                P("Süd 1 · MPPT 250/100 · 3 × 5 LONGi LR5-54HTH-435M · 6,525 kWp · 5,8 kW"),
+                P("Süd 2 · MPPT 250/100 · 3 × 5 LONGi LR5-54HTH-435M · 6,525 kWp · 5,8 kW"),
+                P("Süd 3 · MPPT 250/60  · 1 × 4 LONGi LR5-54HTH-435M · 1,740 kWp · 3,44 kW"),
+                P("Nord   · MPPT 250/100 · 5 × 5 Peimar OS280P · 7,000 kWp · 5,8 kW"),
                 P("Gesamt: 59 Module · 21,790 kWp", cls="font-semibold mt-2"),
                 cls="border rounded p-3 text-sm space-y-1",
             ),
+            cls="border rounded-lg p-4 mb-4",
+        ),
+        Div(
+            H2("4. Batteriespeicher", cls="text-lg font-semibold mb-2"),
+            P(f"Batterieprofil: {PYLONTECH_PROFILE_NAME}", cls="font-semibold mb-2"),
+            Div(
+                P("4 × Pylontech US5000 · 4,8 kWh = 19,20 kWh"),
+                P("1 × Pylontech US3000C · 3,552 kWh"),
+                P("7 × Pylontech US2000C · 2,4 kWh = 16,80 kWh"),
+                P(f"Nominal: {PYLONTECH_CAPACITY_WH / 1000:.3f} kWh", cls="font-semibold mt-2"),
+                P(f"Bei 95 % DoD rechnerisch nutzbar: {PYLONTECH_USABLE_95_DOD_WH / 1000:.3f} kWh"),
+                P("3 × MultiPlus-II: 3 × 8 kW Dauerwirkleistung = 24 kW"),
+                cls="border rounded p-3 text-sm space-y-1 mb-3",
+            ),
+            _field(
+                "Mindest-SOC für spätere Optimierung [%]",
+                "eos-setup-min-soc",
+                _display_value(state, "min_soc", "10"),
+                input_type="number",
+                step="1",
+                help_text="Standard 10 %. Die Cerbo-/Pylontech-BMS-Grenzen bleiben unabhängig davon maßgeblich.",
+            ),
             P(
-                "Für PVLib wird je MPPT-Gruppe ein passendes Leistungsmodell verwendet. So werden Süd/Nord und die unterschiedlichen Reglergrenzen getrennt berücksichtigt.",
-                cls="text-xs opacity-70 mt-2",
+                "EOS bleibt vorerst im Modus PREDICTION und schreibt keine ESS-Sollwerte. Die Batterieparameter werden nur für die spätere Simulation vorbereitet.",
+                cls="text-xs opacity-70",
             ),
             cls="border rounded-lg p-4 mb-4",
         ),
