@@ -151,6 +151,7 @@ def WeatherIrradianceForecast(
 
 
 def LoadForecast(predictions: pd.DataFrame, config: dict, date_time_tz: str, dark: bool) -> FT:
+    """Render a load forecast for both standard-profile and Cerbo-history providers."""
     source = ColumnDataSource(predictions)
     provider = config["load"]["provider"]
     if provider == "LoadAkkudoktorAdjusted":
@@ -165,39 +166,43 @@ def LoadForecast(predictions: pd.DataFrame, config: dict, date_time_tz: str, dar
         sizing_mode="stretch_width",
         height=400,
     )
-    # Add secondary y-axis for stddev
-    stddev_min = predictions["loadakkudoktor_std_power_w"].min()
-    stddev_max = predictions["loadakkudoktor_std_power_w"].max()
-    plot.extra_y_ranges["stddev"] = Range1d(start=stddev_min - 5, end=stddev_max + 5)
-    y2_axis = LinearAxis(y_range_name="stddev", axis_label="Load Standard Deviation [W]")
-    y2_axis.axis_label_text_color = "green"
-    plot.add_layout(y2_axis, "left")
-
     plot.line(
         "date_time",
         "loadforecast_power_w",
         source=source,
-        legend_label="Load forecast value (adjusted by measurement)",
+        legend_label="Load forecast",
         color="red",
     )
-    plot.line(
-        "date_time",
-        "loadakkudoktor_mean_power_w",
-        source=source,
-        legend_label="Load mean value",
-        color="blue",
-    )
-    plot.line(
-        "date_time",
-        "loadakkudoktor_std_power_w",
-        source=source,
-        legend_label="Load standard deviation",
-        color="green",
-        y_range_name="stddev",
-    )
+
+    # The Akkudoktor profile provider exposes additional mean/stddev series.  A local Cerbo
+    # history forecast intentionally only needs the common loadforecast_power_w series.
+    if _has_columns(predictions, "loadakkudoktor_mean_power_w"):
+        plot.line(
+            "date_time",
+            "loadakkudoktor_mean_power_w",
+            source=source,
+            legend_label="Load mean value",
+            color="blue",
+        )
+    if _has_columns(predictions, "loadakkudoktor_std_power_w"):
+        stddev_min = predictions["loadakkudoktor_std_power_w"].min()
+        stddev_max = predictions["loadakkudoktor_std_power_w"].max()
+        if pd.notna(stddev_min) and pd.notna(stddev_max):
+            plot.extra_y_ranges["stddev"] = Range1d(start=stddev_min - 5, end=stddev_max + 5)
+            y2_axis = LinearAxis(y_range_name="stddev", axis_label="Load Standard Deviation [W]")
+            y2_axis.axis_label_text_color = "green"
+            plot.add_layout(y2_axis, "left")
+            plot.line(
+                "date_time",
+                "loadakkudoktor_std_power_w",
+                source=source,
+                legend_label="Load standard deviation",
+                color="green",
+                y_range_name="stddev",
+            )
+
     plot.toolbar.autohide = True
     bokey_apply_theme_to_plot(plot, dark)
-
     return Bokeh(plot)
 
 
@@ -309,27 +314,20 @@ def Prediction(eos_host: str, eos_port: Union[str, int], data: Optional[dict] = 
         cards.append(WeatherIrradianceForecast(predictions, config, date_time_tz, dark))
     if _has_columns(predictions, "elecprice_marketprice_kwh"):
         cards.append(ElectricityPriceForecast(predictions, config, date_time_tz, dark))
-    if _has_columns(
-        predictions,
-        "loadforecast_power_w",
-        "loadakkudoktor_std_power_w",
-        "loadakkudoktor_mean_power_w",
-    ):
+    if _has_columns(predictions, "loadforecast_power_w"):
         cards.append(LoadForecast(predictions, config, date_time_tz, dark))
 
     notices = []
     if "elecprice_marketprice_kwh" in missing_keys:
         notices.append("Strompreisprognose ist nicht konfiguriert.")
-    if any(key.startswith("load") for key in missing_keys):
-        notices.append("Verbrauchsprognose ist nicht konfiguriert.")
+    if "loadforecast_power_w" in missing_keys:
+        notices.append(
+            "Verbrauchsprognose sammelt noch Cerbo-Lastdaten oder ist nicht konfiguriert."
+        )
     if "pvforecast_ac_power" in missing_keys:
         notices.append("Die erste PV-Prognose ist noch nicht verfügbar.")
 
-    info = (
-        P(" ".join(notices), cls="text-sm opacity-70 mb-4")
-        if notices
-        else None
-    )
+    info = P(" ".join(notices), cls="text-sm opacity-70 mb-4") if notices else None
 
     return Div(
         info,
