@@ -16,9 +16,11 @@ MULTIPLUS_CHARGE_POWER_W = 7_350
 EVCS_COUNT = 2
 EVCS_MAX_CURRENT_A = 16
 EVCS_MAX_POWER_W = 11_000
+EVCS_UNIT_IDS = [40, 41]
 EV_TARGET_SOC_PERCENT = 80
 RENAULT_R5_CAPACITY_WH = 52_000
 RENAULT_MEGANE_CAPACITY_WH = 60_000
+BASE_LOAD_ENERGY_KEY = "victron_base_load_emr"
 
 
 def _number(payload: dict[str, Any], key: str, label: str) -> float:
@@ -177,7 +179,7 @@ def build_quick_setup_updates(payload: dict[str, Any]) -> list[tuple[str, Any]]:
         ("pvforecast/provider", "PVForecastPVLibVictron"),
         ("pvforecast/planes", planes),
         ("load/provider", "LoadVictronHistory"),
-        ("measurement/load_emr_keys", ["victron_load_emr"]),
+        ("measurement/load_emr_keys", [BASE_LOAD_ENERGY_KEY]),
         ("adapter/provider", ["Victron"]),
         ("adapter/victron/host", cerbo_host),
         ("adapter/victron/port", 502),
@@ -186,6 +188,9 @@ def build_quick_setup_updates(payload: dict[str, Any]) -> list[tuple[str, Any]]:
         ("adapter/victron/include_ac_coupled_pv", False),
         ("adapter/victron/pv_energy_key", "victron_pv_emr"),
         ("adapter/victron/load_energy_key", "victron_load_emr"),
+        ("adapter/victron/base_load_energy_key", BASE_LOAD_ENERGY_KEY),
+        ("adapter/victron/evcs_unit_ids", EVCS_UNIT_IDS),
+        ("adapter/victron/evcs_energy_key_prefix", "victron_evcs"),
         ("adapter/victron/max_integration_gap_minutes", 15.0),
         ("devices/max_batteries", 1),
         ("devices/batteries", [build_pylontech_battery(min_soc)]),
@@ -244,6 +249,11 @@ def quick_setup_state(config: dict[str, Any]) -> dict[str, Any]:
 
     load_provider = _nested(config, "load", "provider")
     load_keys = _nested(config, "measurement", "load_emr_keys") or []
+    evcs_unit_ids = _nested(config, "adapter", "victron", "evcs_unit_ids") or []
+    base_load_energy_key = (
+        _nested(config, "adapter", "victron", "base_load_energy_key") or BASE_LOAD_ENERGY_KEY
+    )
+    evcs_measurement_active = sorted(evcs_unit_ids) == sorted(EVCS_UNIT_IDS)
 
     return {
         "latitude": _nested(config, "general", "latitude"),
@@ -261,9 +271,11 @@ def quick_setup_state(config: dict[str, Any]) -> dict[str, Any]:
         "ev_count": len(valid_evs),
         "ev_target_soc": ev_target_soc,
         "ev_profile_active": ev_profile_active,
+        "evcs_unit_ids": evcs_unit_ids,
+        "evcs_measurement_active": evcs_measurement_active,
         "load_provider": load_provider,
         "load_forecast_active": (
-            load_provider == "LoadVictronHistory" and "victron_load_emr" in load_keys
+            load_provider == "LoadVictronHistory" and base_load_energy_key in load_keys
         ),
         "configured": bool(_nested(config, "adapter", "victron", "host")),
     }
