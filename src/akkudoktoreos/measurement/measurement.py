@@ -69,6 +69,14 @@ class MeasurementCommonSettings(SettingsBaseModel):
         },
     )
 
+    temperature_keys: list[str] = Field(
+        default_factory=lambda: ["victron_outdoor_temp_c"],
+        json_schema_extra={
+            "description": "The keys of locally retained temperature measurements [°C].",
+            "examples": [["victron_outdoor_temp_c"]],
+        },
+    )
+
     ## Computed fields
     @computed_field  # type: ignore[prop-decorator]
     @property
