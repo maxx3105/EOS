@@ -2,22 +2,72 @@
 
 from __future__ import annotations
 
+from typing import Optional, Union
+
 import numpy as np
 import pandas as pd
 from loguru import logger
 
 from akkudoktoreos.core.coreabc import get_measurement
-from akkudoktoreos.prediction.pvforecastpvlib import PVForecastPVLib
+from akkudoktoreos.prediction.pvforecastpvlib import DeviceType, PVForecastPVLib
 from akkudoktoreos.utils.datetimeutil import DateTime, to_datetime, to_duration
 
 
 class PVForecastPVLibVictron(PVForecastPVLib):
     """PVLib provider whose feedback window follows current Victron measurements."""
 
+    # SmartSolar peak efficiency is specified up to 99 %. A slightly conservative
+    # nominal conversion efficiency avoids treating the charge controller as lossless;
+    # the live Victron feedback then corrects remaining installation-specific bias.
+    _mppt_output_efficiency = 0.985
+
     @classmethod
     def provider_id(cls) -> str:
         """Return the unique provider identifier."""
         return "PVForecastPVLibVictron"
+
+    def _get_model(
+        self,
+        model_spec: Union[str, int, float],
+        database: pd.DataFrame,
+        device_type: DeviceType,
+    ) -> Optional[pd.Series]:
+        """Treat numeric inverter powers as DC-coupled Victron MPPT output stages.
+
+        The base PVLib provider interprets a numeric ``inverter_model`` by selecting a
+        similarly sized CEC grid inverter. That is a poor match for short strings on a
+        SmartSolar charge controller because an arbitrary CEC inverter may have a much
+        higher MPPT voltage window. For the Victron provider, a numeric value therefore
+        means *maximum MPPT output power* and is represented by a PVWatts output stage.
+
+        Named inverter models keep the original behaviour, which preserves compatibility
+        with installations that intentionally use an AC-coupled inverter model.
+        """
+        if device_type == "inverter":
+            try:
+                mppt_output_power_w = float(model_spec)
+            except (TypeError, ValueError):
+                return super()._get_model(model_spec, database, device_type)
+
+            if mppt_output_power_w > 0:
+                efficiency = self._mppt_output_efficiency
+                # pvlib.inverter.pvwatts clips AC output at eta_inv_nom * pdc0.
+                # Set pdc0 accordingly so the resulting usable PV power is capped at
+                # the configured 48-V SmartSolar nominal PV power.
+                model = pd.Series(
+                    {
+                        "pdc0": mppt_output_power_w / efficiency,
+                        "eta_inv_nom": efficiency,
+                    },
+                    name=f"Victron_MPPT_{mppt_output_power_w:.0f}W",
+                )
+                logger.info(
+                    "Using Victron DC-coupled MPPT output model: "
+                    f"limit={mppt_output_power_w:.0f} W, efficiency={efficiency:.3f}"
+                )
+                return model
+
+        return super()._get_model(model_spec, database, device_type)
 
     def _current_correction_time(self) -> DateTime:
         """Return the real current time instead of EOS' hour-rounded EMS start."""
