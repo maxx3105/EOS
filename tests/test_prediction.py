@@ -22,6 +22,7 @@ from akkudoktoreos.prediction.loadakkudoktor import (
     LoadAkkudoktorAdjusted,
 )
 from akkudoktoreos.prediction.loadimport import LoadImport
+from akkudoktoreos.prediction.loadvictronhistory import LoadVictronHistory
 from akkudoktoreos.prediction.loadvrm import LoadVrm
 from akkudoktoreos.prediction.prediction import (
     Prediction,
@@ -32,6 +33,7 @@ from akkudoktoreos.prediction.pvforecastforecastsolar import PVForecastForecastS
 from akkudoktoreos.prediction.pvforecasthomeassistant import PVForecastHomeAssistant
 from akkudoktoreos.prediction.pvforecastimport import PVForecastImport
 from akkudoktoreos.prediction.pvforecastpvlib import PVForecastPVLib
+from akkudoktoreos.prediction.pvforecastpvlibvictron import PVForecastPVLibVictron
 from akkudoktoreos.prediction.pvforecastpvnode import PVForecastPVNode
 from akkudoktoreos.prediction.pvforecastsolcast import PVForecastSolcast
 from akkudoktoreos.prediction.pvforecastvrm import PVForecastVrm
@@ -72,6 +74,7 @@ def forecast_providers():
         FeedInTariffTibber(),
         LoadAkkudoktor(),
         LoadAkkudoktorAdjusted(),
+        LoadVictronHistory(),
         LoadImport(),
         LoadVrm(),
         PVForecastAkkudoktor(),
@@ -79,6 +82,7 @@ def forecast_providers():
         PVForecastHomeAssistant(),
         PVForecastImport(),
         PVForecastPVLib(),
+        PVForecastPVLibVictron(),
         PVForecastPVNode(),
         PVForecastSolcast(),
         PVForecastVrm(),
@@ -114,37 +118,44 @@ def test_initialization(prediction, forecast_providers):
 
 def test_provider_sequence(prediction):
     """Test the provider sequence is maintained in the Prediction instance."""
-    assert isinstance(prediction.providers[0], WeatherBrightSky)
-    assert isinstance(prediction.providers[1], WeatherClearOutside)
-    assert isinstance(prediction.providers[2], WeatherImport)
-    assert isinstance(prediction.providers[3], WeatherOpenMeteo)
-    assert isinstance(prediction.providers[4], ElecFeeFixed)
-    assert isinstance(prediction.providers[5], ElecFeeImport)
-    assert isinstance(prediction.providers[6], ElecPriceAkkudoktor)
-    assert isinstance(prediction.providers[7], ElecPriceEnergyCharts)
-    assert isinstance(prediction.providers[8], ElecPriceFixed)
-    assert isinstance(prediction.providers[9], ElecPriceImport)
-    assert isinstance(prediction.providers[10], ElecPriceSMARD)
-    assert isinstance(prediction.providers[11], ElecPriceTibber)
-    assert isinstance(prediction.providers[12], FeedInTariffAkkudoktor)
-    assert isinstance(prediction.providers[13], FeedInTariffDvhubOnline)
-    assert isinstance(prediction.providers[14], FeedInTariffEnergyCharts)
-    assert isinstance(prediction.providers[15], FeedInTariffFixed)
-    assert isinstance(prediction.providers[16], FeedInTariffImport)
-    assert isinstance(prediction.providers[17], FeedInTariffSMARD)
-    assert isinstance(prediction.providers[18], FeedInTariffTibber)
-    assert isinstance(prediction.providers[19], LoadAkkudoktor)
-    assert isinstance(prediction.providers[20], LoadAkkudoktorAdjusted)
-    assert isinstance(prediction.providers[21], LoadImport)
-    assert isinstance(prediction.providers[22], LoadVrm)
-    assert isinstance(prediction.providers[23], PVForecastAkkudoktor)
-    assert isinstance(prediction.providers[24], PVForecastForecastSolar)
-    assert isinstance(prediction.providers[25], PVForecastHomeAssistant)
-    assert isinstance(prediction.providers[26], PVForecastImport)
-    assert isinstance(prediction.providers[27], PVForecastPVLib)
-    assert isinstance(prediction.providers[28], PVForecastPVNode)
-    assert isinstance(prediction.providers[29], PVForecastSolcast)
-    assert isinstance(prediction.providers[30], PVForecastVrm)
+    expected = [
+        WeatherBrightSky,
+        WeatherClearOutside,
+        WeatherImport,
+        WeatherOpenMeteo,
+        ElecFeeFixed,
+        ElecFeeImport,
+        ElecPriceAkkudoktor,
+        ElecPriceEnergyCharts,
+        ElecPriceFixed,
+        ElecPriceImport,
+        ElecPriceSMARD,
+        ElecPriceTibber,
+        FeedInTariffAkkudoktor,
+        FeedInTariffDvhubOnline,
+        FeedInTariffEnergyCharts,
+        FeedInTariffFixed,
+        FeedInTariffImport,
+        FeedInTariffSMARD,
+        FeedInTariffTibber,
+        LoadAkkudoktor,
+        LoadAkkudoktorAdjusted,
+        LoadVictronHistory,
+        LoadImport,
+        LoadVrm,
+        PVForecastAkkudoktor,
+        PVForecastForecastSolar,
+        PVForecastHomeAssistant,
+        PVForecastImport,
+        PVForecastPVLib,
+        PVForecastPVLibVictron,
+        PVForecastPVNode,
+        PVForecastSolcast,
+        PVForecastVrm,
+    ]
+    assert len(prediction.providers) == len(expected)
+    for provider, expected_type in zip(prediction.providers, expected):
+        assert isinstance(provider, expected_type)
 
 
 def test_provider_by_id(prediction, forecast_providers):
@@ -157,47 +168,50 @@ def test_prediction_repr(prediction):
     """Test that the Prediction instance's representation is correct."""
     result = repr(prediction)
     assert "Prediction([" in result
-    assert "ElecFeeFixed" in result
-    assert "ElecFeeImport" in result
-    assert "ElecPriceAkkudoktor" in result
-    assert "ElecPriceEnergyCharts" in result
-    assert "ElecPriceFixed" in result
-    assert "ElecPriceImport" in result
-    assert "ElecPriceSMARD" in result
-    assert "ElecPriceTibber" in result
-    assert "FeedInTariffAkkudoktor" in result
-    assert "FeedInTariffDvhubOnline" in result
-    assert "FeedInTariffEnergyCharts" in result
-    assert "FeedInTariffFixed" in result
-    assert "FeedInTariffImport" in result
-    assert "FeedInTariffSMARD" in result
-    assert "FeedInTariffTibber" in result
-    assert "LoadAkkudoktor" in result
-    assert "LoadAkkudoktorAdjusted" in result
-    assert "LoadImport" in result
-    assert "LoadVrm" in result
-    assert "PVForecastAkkudoktor" in result
-    assert "PVForecastForecastSolar" in result
-    assert "PVForecastHomeAssistant" in result
-    assert "PVForecastImport" in result
-    assert "PVForecastPVLib" in result
-    assert "PVForecastPVNode" in result
-    assert "PVForecastSolcast" in result
-    assert "PVForecastVrm" in result
-    assert "WeatherBrightSky" in result
-    assert "WeatherClearOutside" in result
-    assert "WeatherImport" in result
-    assert "WeatherOpenMeteo" in result
+    expected_names = [
+        "ElecFeeFixed",
+        "ElecFeeImport",
+        "ElecPriceAkkudoktor",
+        "ElecPriceEnergyCharts",
+        "ElecPriceFixed",
+        "ElecPriceImport",
+        "ElecPriceSMARD",
+        "ElecPriceTibber",
+        "FeedInTariffAkkudoktor",
+        "FeedInTariffDvhubOnline",
+        "FeedInTariffEnergyCharts",
+        "FeedInTariffFixed",
+        "FeedInTariffImport",
+        "FeedInTariffSMARD",
+        "FeedInTariffTibber",
+        "LoadAkkudoktor",
+        "LoadAkkudoktorAdjusted",
+        "LoadVictronHistory",
+        "LoadImport",
+        "LoadVrm",
+        "PVForecastAkkudoktor",
+        "PVForecastForecastSolar",
+        "PVForecastHomeAssistant",
+        "PVForecastImport",
+        "PVForecastPVLib",
+        "PVForecastPVLibVictron",
+        "PVForecastPVNode",
+        "PVForecastSolcast",
+        "PVForecastVrm",
+        "WeatherBrightSky",
+        "WeatherClearOutside",
+        "WeatherImport",
+        "WeatherOpenMeteo",
+    ]
+    for name in expected_names:
+        assert name in result
 
 
 @pytest.mark.asyncio
 async def test_empty_providers(prediction, forecast_providers):
     """Test behavior when Prediction does not have providers."""
-    # Clear all prediction providers from prediction
     providers_bkup = prediction.providers.copy()
     prediction.providers.clear()
     assert prediction.providers == []
     await prediction.update_data()  # Should not raise an error even with no providers
-
-    # Cleanup after Test
     prediction.providers = providers_bkup
