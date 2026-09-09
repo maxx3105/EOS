@@ -69,6 +69,26 @@ def test_250_60_numeric_limit_is_preserved(config_eos):
     assert model["Pdco"] * provider._mppt_output_efficiency == pytest.approx(3440.0)
 
 
+def test_hoymiles_named_model_is_ac_stage_and_clips_at_800_w(config_eos):
+    PVForecastPVLibVictron.reset_instance()
+    provider = PVForecastPVLibVictron()
+
+    model = provider._get_model("Hoymiles_HMS_800W_2T_AC_OUT", pd.DataFrame(), "inverter")
+
+    assert model is not None
+    assert model.name == "Hoymiles_HMS_800W_2T_AC_OUT"
+    assert model["Paco"] == pytest.approx(800.0)
+    assert model["Pdco"] * provider._hoymiles_ac_efficiency == pytest.approx(800.0)
+
+    v_dc = pd.Series([40.0, 40.0], index=[0, 1])
+    p_dc = pd.Series([500.0, 1000.0], index=[0, 1])
+    ac = sandia(v_dc, p_dc, model)
+
+    assert isinstance(ac, pd.Series)
+    assert ac.iloc[0] == pytest.approx(500.0 * 0.967)
+    assert ac.iloc[1] == pytest.approx(800.0)
+
+
 def test_aligns_feedback_to_completed_quarter_hour(config_eos):
     PVForecastPVLibVictron.reset_instance()
     provider = PVForecastPVLibVictron()
