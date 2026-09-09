@@ -4,7 +4,9 @@ import pytest
 
 from akkudoktoreos.server.dash.about import _SETUP_SCRIPT
 from akkudoktoreos.server.dash.quicksetup import (
+    BASE_LOAD_ENERGY_KEY,
     EVCS_MAX_POWER_W,
+    EVCS_UNIT_IDS,
     EV_TARGET_SOC_PERCENT,
     PYLONTECH_CAPACITY_WH,
     RENAULT_MEGANE_CAPACITY_WH,
@@ -21,6 +23,7 @@ from akkudoktoreos.server.dash.quicksetup import (
 def test_quick_setup_uses_actual_provider_config_paths():
     assert '["weather.provider", "OpenMeteo"]' in _SETUP_SCRIPT
     assert '["pvforecast.provider", "PVForecastPVLibVictron"]' in _SETUP_SCRIPT
+    assert '["load.provider", "LoadVictronHistory"]' in _SETUP_SCRIPT
     assert "weather.weather_provider" not in _SETUP_SCRIPT
     assert "pvforecast.pvforecast_provider" not in _SETUP_SCRIPT
 
@@ -32,6 +35,8 @@ def test_quick_setup_enables_read_only_victron_prediction_stack():
         '["adapter.victron.port", 502]',
         '["adapter.victron.unit_id", 100]',
         '["adapter.victron.include_ac_coupled_pv", false]',
+        '["adapter.victron.evcs_unit_ids", [40, 41]]',
+        '["measurement.load_emr_keys", ["victron_base_load_emr"]]',
         '["prediction.hours", 48]',
         '["devices.max_batteries", 1]',
         '["devices.max_inverters", 3]',
@@ -93,6 +98,7 @@ def test_dual_evcs_renault_profile_defaults_to_80_percent():
     evs = build_electric_vehicles()
     assert len(evs) == 2
     assert EV_TARGET_SOC_PERCENT == 80
+    assert EVCS_UNIT_IDS == [40, 41]
 
     r5, megane = evs
     assert r5["device_id"] == "renault-r5"
@@ -136,8 +142,11 @@ def test_quick_setup_builds_valid_rest_paths():
     assert updates["weather/provider"] == "OpenMeteo"
     assert updates["pvforecast/provider"] == "PVForecastPVLibVictron"
     assert updates["load/provider"] == "LoadVictronHistory"
-    assert updates["measurement/load_emr_keys"] == ["victron_load_emr"]
+    assert updates["measurement/load_emr_keys"] == [BASE_LOAD_ENERGY_KEY]
     assert updates["adapter/victron/load_energy_key"] == "victron_load_emr"
+    assert updates["adapter/victron/base_load_energy_key"] == BASE_LOAD_ENERGY_KEY
+    assert updates["adapter/victron/evcs_unit_ids"] == [40, 41]
+    assert updates["adapter/victron/evcs_energy_key_prefix"] == "victron_evcs"
     assert updates["adapter/victron/host"] == "192.168.178.150"
     assert updates["adapter/victron/include_ac_coupled_pv"] is False
     assert updates["ems/mode"] == "PREDICTION"
@@ -162,10 +171,16 @@ def test_quick_setup_reads_saved_profile_back():
     evs = build_electric_vehicles(80)
     config = {
         "general": {"latitude": 47.4374, "longitude": 15.0036},
-        "adapter": {"victron": {"host": "192.168.178.150"}},
+        "adapter": {
+            "victron": {
+                "host": "192.168.178.150",
+                "evcs_unit_ids": [40, 41],
+                "base_load_energy_key": BASE_LOAD_ENERGY_KEY,
+            }
+        },
         "pvforecast": {"planes": planes},
         "load": {"provider": "LoadVictronHistory"},
-        "measurement": {"load_emr_keys": ["victron_load_emr"]},
+        "measurement": {"load_emr_keys": [BASE_LOAD_ENERGY_KEY]},
         "devices": {
             "batteries": [battery],
             "inverters": inverters,
@@ -188,5 +203,7 @@ def test_quick_setup_reads_saved_profile_back():
     assert state["ev_count"] == 2
     assert state["ev_target_soc"] == 80
     assert state["ev_profile_active"] is True
+    assert state["evcs_unit_ids"] == [40, 41]
+    assert state["evcs_measurement_active"] is True
     assert state["load_provider"] == "LoadVictronHistory"
     assert state["load_forecast_active"] is True
