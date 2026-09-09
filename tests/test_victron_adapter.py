@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from akkudoktoreos.adapter.victron import VictronAdapter, VictronAdapterCommonSettings
+from akkudoktoreos.devices.devices import BatteriesCommonSettings
 from akkudoktoreos.utils.datetimeutil import to_datetime
 
 
@@ -123,3 +124,31 @@ class TestVictronMeasurementIntegration:
             await provider._store_pv_energy(second, 1000.0)
 
         assert provider._pv_energy_kwh == pytest.approx(10.0)
+
+    @pytest.mark.asyncio
+    async def test_stores_cerbo_soc_for_configured_battery(self, provider, config_eos):
+        config_eos.devices.max_batteries = 1
+        config_eos.devices.batteries = [
+            BatteriesCommonSettings(device_id="battery1", capacity_wh=39552)
+        ]
+        sample_time = to_datetime("2026-06-01T12:00:00+02:00")
+
+        measurement = provider.measurement
+        with patch.object(measurement, "update_value", new=AsyncMock()) as update_value:
+            await provider._store_battery_soc(sample_time, 72.0)
+
+        update_value.assert_awaited_once_with(sample_time, "battery1-soc-factor", 0.72)
+
+    @pytest.mark.asyncio
+    async def test_ignores_invalid_cerbo_soc(self, provider, config_eos):
+        config_eos.devices.max_batteries = 1
+        config_eos.devices.batteries = [
+            BatteriesCommonSettings(device_id="battery1", capacity_wh=39552)
+        ]
+        sample_time = to_datetime("2026-06-01T12:00:00+02:00")
+
+        measurement = provider.measurement
+        with patch.object(measurement, "update_value", new=AsyncMock()) as update_value:
+            await provider._store_battery_soc(sample_time, 120.0)
+
+        update_value.assert_not_awaited()
