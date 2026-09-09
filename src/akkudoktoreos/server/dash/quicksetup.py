@@ -5,9 +5,18 @@ from __future__ import annotations
 from typing import Any
 
 
-VICTRON_48V_PROFILE_NAME = "48V / 3x MultiPlus-II 10000 / 4x MPPT"
+VICTRON_48V_PROFILE_NAME = "48V / 3x MultiPlus-II 10000 / 4x MPPT + HMS-800W-2T AC-out"
 PYLONTECH_PROFILE_NAME = "4x US5000 + 1x US3000C + 7x US2000C"
 EVCS_PROFILE_NAME = "2x Victron EV Charging Station 32A / 3-phasig / auf 16A begrenzt"
+HOYMILES_PROFILE_NAME = "Hoymiles HMS-800W-2T / 2x LONGi 435 W / Ost / AC-out"
+HOYMILES_INVERTER_MODEL = "Hoymiles_HMS_800W_2T_AC_OUT"
+HOYMILES_MODULE_POWER_W = 435
+HOYMILES_MODULE_COUNT = 2
+HOYMILES_PEAKPOWER_KW = 0.870
+HOYMILES_AC_LIMIT_W = 800
+HOYMILES_EFFICIENCY = 0.967
+HOYMILES_TILT_DEG = 70.0
+HOYMILES_AZIMUTH_DEG = 90.0
 PYLONTECH_CAPACITY_WH = 39_552
 PYLONTECH_USABLE_95_DOD_WH = 37_574
 MULTIPLUS_CONTINUOUS_POWER_W = 8_000
@@ -31,6 +40,14 @@ def _number(payload: dict[str, Any], key: str, label: str) -> float:
     return value
 
 
+def _number_default(payload: dict[str, Any], key: str, label: str, default: float) -> float:
+    try:
+        value = float(payload.get(key, default))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} ist ungültig.") from exc
+    return value
+
+
 def _validate_azimuth(value: float, label: str) -> float:
     if not 0 <= value <= 360:
         raise ValueError(f"{label} muss zwischen 0 und 360° liegen.")
@@ -38,15 +55,23 @@ def _validate_azimuth(value: float, label: str) -> float:
 
 
 def build_victron_48v_planes(
-    *, tilt: float = 25.0, south_azimuth: float = 180.0, north_azimuth: float = 0.0
+    *,
+    tilt: float = 25.0,
+    south_azimuth: float = 180.0,
+    north_azimuth: float = 0.0,
+    east_tilt: float = HOYMILES_TILT_DEG,
+    east_azimuth: float = HOYMILES_AZIMUTH_DEG,
 ) -> list[dict[str, Any]]:
-    """Build the four DC-coupled PV groups of the configured Victron installation."""
+    """Build four DC-coupled SmartSolar groups plus the AC-out Hoymiles group."""
     if not 0 <= tilt <= 90:
         raise ValueError("Modulneigung muss zwischen 0 und 90° liegen.")
+    if not 0 <= east_tilt <= 90:
+        raise ValueError("Hoymiles-Modulneigung muss zwischen 0 und 90° liegen.")
     south_azimuth = _validate_azimuth(south_azimuth, "Süd-Azimut")
     north_azimuth = _validate_azimuth(north_azimuth, "Nord-Azimut")
+    east_azimuth = _validate_azimuth(east_azimuth, "Hoymiles-Ost-Azimut")
 
-    def plane(
+    def dc_plane(
         azimuth: float,
         module_power_w: float,
         modules_per_string: int,
@@ -67,11 +92,29 @@ def build_victron_48v_planes(
             "strings_per_inverter": strings,
         }
 
+    hoymiles_plane = {
+        "surface_tilt": east_tilt,
+        "surface_azimuth": east_azimuth,
+        "peakpower": HOYMILES_PEAKPOWER_KW,
+        "mountingplace": "building",
+        "loss": 0.0,
+        "trackingtype": 0,
+        "albedo": 0.2,
+        "module_model": str(float(HOYMILES_MODULE_POWER_W)),
+        # Named model is deliberately distinct from the numeric SmartSolar convention.
+        # PVForecastPVLibVictron maps it to an AC microinverter with an 800 W output cap.
+        "inverter_model": HOYMILES_INVERTER_MODEL,
+        # HMS-800W-2T has two independent MPPT inputs; both modules have the same orientation.
+        "modules_per_string": 1,
+        "strings_per_inverter": HOYMILES_MODULE_COUNT,
+    }
+
     return [
-        plane(south_azimuth, 435.0, 5, 3, 5800),
-        plane(south_azimuth, 435.0, 5, 3, 5800),
-        plane(south_azimuth, 435.0, 4, 1, 3440),
-        plane(north_azimuth, 280.0, 5, 5, 5800),
+        dc_plane(south_azimuth, 435.0, 5, 3, 5800),
+        dc_plane(south_azimuth, 435.0, 5, 3, 5800),
+        dc_plane(south_azimuth, 435.0, 4, 1, 3440),
+        dc_plane(north_azimuth, 280.0, 5, 5, 5800),
+        hoymiles_plane,
     ]
 
 
@@ -155,6 +198,10 @@ def build_quick_setup_updates(payload: dict[str, Any]) -> list[tuple[str, Any]]:
     tilt = _number(payload, "tilt", "Modulneigung")
     south_azimuth = _number(payload, "south_azimuth", "Süd-Azimut")
     north_azimuth = _number(payload, "north_azimuth", "Nord-Azimut")
+    east_tilt = _number_default(payload, "east_tilt", "Hoymiles-Modulneigung", HOYMILES_TILT_DEG)
+    east_azimuth = _number_default(
+        payload, "east_azimuth", "Hoymiles-Ost-Azimut", HOYMILES_AZIMUTH_DEG
+    )
     min_soc = int(_number(payload, "min_soc", "Mindest-SOC / Inselreserve"))
     try:
         ev_target_soc = int(float(payload.get("ev_target_soc", EV_TARGET_SOC_PERCENT)))
@@ -167,6 +214,8 @@ def build_quick_setup_updates(payload: dict[str, Any]) -> list[tuple[str, Any]]:
         tilt=tilt,
         south_azimuth=south_azimuth,
         north_azimuth=north_azimuth,
+        east_tilt=east_tilt,
+        east_azimuth=east_azimuth,
     )
 
     return [
@@ -185,7 +234,9 @@ def build_quick_setup_updates(payload: dict[str, Any]) -> list[tuple[str, Any]]:
         ("adapter/victron/port", 502),
         ("adapter/victron/unit_id", 100),
         ("adapter/victron/timeout_sec", 3.0),
-        ("adapter/victron/include_ac_coupled_pv", False),
+        # The Hoymiles is connected on AC-out and is exposed by the GX system service as
+        # AC-coupled PV. Include those values in the total PV meter used for live correction.
+        ("adapter/victron/include_ac_coupled_pv", True),
         ("adapter/victron/pv_energy_key", "victron_pv_emr"),
         ("adapter/victron/load_energy_key", "victron_load_emr"),
         ("adapter/victron/base_load_energy_key", BASE_LOAD_ENERGY_KEY),
@@ -215,7 +266,8 @@ def quick_setup_state(config: dict[str, Any]) -> dict[str, Any]:
     planes = _nested(config, "pvforecast", "planes")
     valid_planes = [plane for plane in planes or [] if isinstance(plane, dict)]
     first_plane = valid_planes[0] if valid_planes else {}
-    last_plane = valid_planes[-1] if valid_planes else {}
+    north_plane = valid_planes[3] if len(valid_planes) >= 4 else {}
+    hoymiles_plane = valid_planes[4] if len(valid_planes) >= 5 else {}
 
     total_peakpower = 0.0
     for plane in valid_planes:
@@ -253,7 +305,17 @@ def quick_setup_state(config: dict[str, Any]) -> dict[str, Any]:
     base_load_energy_key = (
         _nested(config, "adapter", "victron", "base_load_energy_key") or BASE_LOAD_ENERGY_KEY
     )
+    include_ac_coupled_pv = bool(
+        _nested(config, "adapter", "victron", "include_ac_coupled_pv")
+    )
     evcs_measurement_active = sorted(evcs_unit_ids) == sorted(EVCS_UNIT_IDS)
+    hoymiles_active = (
+        hoymiles_plane.get("inverter_model") == HOYMILES_INVERTER_MODEL
+        and abs(float(hoymiles_plane.get("peakpower") or 0.0) - HOYMILES_PEAKPOWER_KW) < 0.01
+        and hoymiles_plane.get("modules_per_string") == 1
+        and hoymiles_plane.get("strings_per_inverter") == 2
+        and include_ac_coupled_pv
+    )
 
     return {
         "latitude": _nested(config, "general", "latitude"),
@@ -261,10 +323,18 @@ def quick_setup_state(config: dict[str, Any]) -> dict[str, Any]:
         "cerbo_host": _nested(config, "adapter", "victron", "host"),
         "tilt": first_plane.get("surface_tilt"),
         "south_azimuth": first_plane.get("surface_azimuth"),
-        "north_azimuth": last_plane.get("surface_azimuth"),
+        "north_azimuth": north_plane.get("surface_azimuth"),
+        "east_tilt": hoymiles_plane.get("surface_tilt"),
+        "east_azimuth": hoymiles_plane.get("surface_azimuth"),
         "plane_count": len(valid_planes),
         "total_peakpower": round(total_peakpower, 3),
-        "profile_active": len(valid_planes) == 4 and abs(total_peakpower - 21.79) < 0.05,
+        "profile_active": (
+            len(valid_planes) == 5
+            and abs(total_peakpower - (21.79 + HOYMILES_PEAKPOWER_KW)) < 0.05
+            and hoymiles_active
+        ),
+        "hoymiles_active": hoymiles_active,
+        "include_ac_coupled_pv": include_ac_coupled_pv,
         "battery_capacity_wh": battery_capacity,
         "min_soc": min_soc,
         "battery_profile_active": battery_capacity == PYLONTECH_CAPACITY_WH and inverter_count == 3,
