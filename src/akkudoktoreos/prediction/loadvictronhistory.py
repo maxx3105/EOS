@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from typing import ClassVar, Optional
+from typing import Any, ClassVar, Optional
 
 import numpy as np
 import pandas as pd
 from loguru import logger
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from akkudoktoreos.config.configabc import SettingsBaseModel
 from akkudoktoreos.prediction.loadabc import LoadProvider
@@ -103,6 +103,36 @@ class LoadVictronHistoryCommonSettings(SettingsBaseModel):
             "description": "Minimum historic samples for a quarter-hour slot before using its profile."
         },
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_history_defaults(cls, values: Any) -> Any:
+        """Upgrade the old 28-day/7-day defaults without overriding deliberate new settings.
+
+        Older Synology/Victron configs may have serialized the former defaults even though the user
+        never selected them explicitly. The absence of every new seasonal/temperature field marks
+        such a legacy payload. Only that exact legacy default pair is migrated.
+        """
+        if not isinstance(values, dict):
+            return values
+        new_fields = {
+            "seasonal_weighting",
+            "seasonal_half_life_days",
+            "temperature_weighting",
+            "temperature_half_life_c",
+            "temperature_history_key",
+        }
+        is_legacy_payload = not any(field in values for field in new_fields)
+        if (
+            is_legacy_payload
+            and values.get("history_days") == 28
+            and float(values.get("recency_half_life_days", 7.0)) == 7.0
+        ):
+            migrated = dict(values)
+            migrated["history_days"] = 90
+            migrated["recency_half_life_days"] = 21.0
+            return migrated
+        return values
 
 
 class LoadVictronHistory(LoadProvider):
