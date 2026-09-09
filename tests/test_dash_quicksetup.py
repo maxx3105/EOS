@@ -92,7 +92,8 @@ def test_victron_48v_profile_matches_installed_pv_groups():
     assert hoymiles["modules_per_string"] == 1
     assert hoymiles["strings_per_inverter"] == 2
     assert hoymiles["inverter_model"] == HOYMILES_INVERTER_MODEL
-    assert hoymiles["peakpower"] == pytest.approx(HOYMILES_PEAKPOWER_KW == 0.870)
+    assert HOYMILES_PEAKPOWER_KW == pytest.approx(0.870)
+    assert hoymiles["peakpower"] == pytest.approx(HOYMILES_PEAKPOWER_KW)
     assert HOYMILES_AC_LIMIT_W == 800
 
 
