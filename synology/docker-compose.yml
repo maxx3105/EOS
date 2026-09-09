@@ -2,28 +2,68 @@
 services:
   eos:
     container_name: eos-victron
-    image: eos-victron:local
-    build:
-      context: "https://github.com/maxx3105/EOS.git#main"
-      dockerfile: Dockerfile
-      args:
-        PYTHON_VERSION: "3.13.15"
-        BUILD_VERSION: "synology-main"
+    image: akkudoktor/eos:latest
+
+    # Synology Container Manager does not include git on the Docker host.
+    # Start from the public upstream EOS image and overlay this fork's current
+    # Python sources from main at container startup. This keeps installation to
+    # one Compose file and avoids a local Docker build, GitHub Actions and GHCR.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        echo "EOS Victron: lade aktuellen Fork-Stand von main ..."
+        python - <<'PY'
+        from pathlib import Path
+        import shutil
+        import tarfile
+        import tempfile
+        import urllib.request
+
+        url = "https://github.com/maxx3105/EOS/archive/refs/heads/main.tar.gz"
+        tmp = Path(tempfile.mkdtemp(prefix="eos-victron-"))
+        archive = tmp / "main.tar.gz"
+
+        try:
+            urllib.request.urlretrieve(url, archive)
+            extract_dir = tmp / "extract"
+            extract_dir.mkdir()
+            with tarfile.open(archive, "r:gz") as tf:
+                tf.extractall(extract_dir, filter="data")
+
+            roots = [p for p in extract_dir.iterdir() if p.is_dir()]
+            if len(roots) != 1:
+                raise RuntimeError("Unerwarteter Aufbau des GitHub-Archivs")
+
+            fork_src = roots[0] / "src"
+            if not fork_src.is_dir():
+                raise RuntimeError("src-Verzeichnis im GitHub-Archiv fehlt")
+
+            shutil.copytree(fork_src, Path("/opt/eos/src"), dirs_exist_ok=True)
+            print("EOS Victron: Fork-Quellcode erfolgreich geladen.")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+        PY
+        exec python -m akkudoktoreos.server.eos --host 0.0.0.0 --run_as_user eos
+
     environment:
       OPENBLAS_NUM_THREADS: "1"
       OMP_NUM_THREADS: "1"
       MKL_NUM_THREADS: "1"
       PIP_PROGRESS_BAR: "off"
       PIP_NO_COLOR: "1"
+      PYTHONUNBUFFERED: "1"
       EOS_SERVER__HOST: "0.0.0.0"
       EOS_SERVER__PORT: "8503"
       EOS_SERVER__EOSDASH_HOST: "0.0.0.0"
       EOS_SERVER__EOSDASH_PORT: "8504"
       EOS_SERVER__EOSDASH_SESSKEY: "eos-victron-synology-local-session"
-    read_only: true
+
     restart: unless-stopped
+
     ports:
       - "8503:8503"
       - "8504:8504"
+
     volumes:
       - ./synology-data:/data:rw
