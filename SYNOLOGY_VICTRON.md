@@ -1,15 +1,19 @@
 # EOS + Victron Cerbo GX auf Synology DS920+
 
-Diese Anleitung beschreibt den **aktuell funktionierenden Standardweg** für den Fork `maxx3105/EOS`.
+Diese Anleitung beschreibt den einfachen Standardweg für den Fork `maxx3105/EOS`.
 
-Die Synology benötigt nur **eine Compose-Datei**. Container Manager baut das Image direkt aus dem öffentlichen `main`-Branch des Forks. Es werden **kein Docker-Hub-Image, kein GitHub-Login, keine GitHub Actions, kein SSH, kein Git und keine ENV-Datei** benötigt.
+Die Synology benötigt nur **eine Compose-Datei**. Es werden **kein Git, kein SSH, keine GitHub Actions, kein eigenes Container-Registry-Image und keine ENV-Datei** benötigt.
+
+Der Ablauf ist:
 
 ```text
 1 Datei: docker-compose.yml
         ↓
 Container Manager → Projekt → Erstellen
         ↓
-EOS wird direkt aus main gebaut
+öffentliches EOS-Basisimage wird geladen
+        ↓
+aktueller Fork-Quellcode aus main wird automatisch eingespielt
         ↓
 http://NAS-IP:8504 öffnen
         ↓
@@ -57,10 +61,12 @@ In diesen Ordner kommt nur:
 ```text
 /volume1/docker/eos-victron/
 ├── docker-compose.yml
-└── synology-data/   # wird für persistente Daten verwendet
+└── synology-data/
 ```
 
-## 3. Richtige Compose-Datei herunterladen
+`synology-data` enthält später die persistente EOS-Konfiguration und Messhistorie.
+
+## 3. Compose-Datei herunterladen
 
 Verwende aus `main` entweder:
 
@@ -74,33 +80,30 @@ oder die identische Datei:
 docker-compose.synology.yaml
 ```
 
-Auf der NAS muss sie als
+Auf der NAS als
 
 ```text
 docker-compose.yml
 ```
 
-liegen.
+speichern.
 
-Die funktionierende Datei enthält unter anderem:
+Die aktuelle Datei enthält unter anderem:
 
 ```yaml
 services:
   eos:
-    container_name: eos-victron
-    image: eos-victron:local
-    build:
-      context: "https://github.com/maxx3105/EOS.git#main"
-      dockerfile: Dockerfile
+    image: akkudoktor/eos:latest
+    entrypoint: ["/bin/sh", "-c"]
 ```
 
-**Wichtig:** Wenn in deiner Datei stattdessen
+Sie lädt beim Containerstart automatisch den aktuellen Fork-Quellcode aus:
 
-```yaml
-image: maxx3105/eos:latest
+```text
+https://github.com/maxx3105/EOS/archive/refs/heads/main.tar.gz
 ```
 
-steht, ist das eine alte/falsche Datei. Dieses Docker-Hub-Image ist für diesen Installationsweg nicht erforderlich.
+Dadurch wird auf der Synology **kein git-Programm** benötigt.
 
 ## 4. Projekt im Container Manager erstellen
 
@@ -123,20 +126,38 @@ Als Compose-Datei die dort liegende `docker-compose.yml` verwenden.
 
 Projekt erstellen und starten.
 
-Beim ersten Start baut die DS920+ das Image selbst aus `main`. Das dauert länger als ein normaler Containerstart und kann die CPU vorübergehend deutlich auslasten.
-
-## 5. Woran erkenne ich den richtigen Ablauf?
-
-Richtig ist, wenn Container Manager einen **Build** startet.
-
-Falsch ist, wenn im Terminal steht:
+Beim ersten Start sollte Container Manager zuerst das öffentliche Image
 
 ```text
-eos Pulling
+akkudoktor/eos:latest
+```
+
+laden. Danach erscheint im Container-Protokoll sinngemäß:
+
+```text
+EOS Victron: lade aktuellen Fork-Stand von main ...
+EOS Victron: Fork-Quellcode erfolgreich geladen.
+```
+
+## 5. Alte Compose-Dateien erkennen
+
+Wenn stattdessen im Terminal steht:
+
+```text
 pull access denied for maxx3105/eos
 ```
 
-Dann wird noch eine alte Compose-Datei verwendet. Projekt schließen/löschen, die aktuelle `docker-compose.yml` aus `main` verwenden und das Projekt neu erstellen.
+wird noch eine alte Compose-Datei verwendet.
+
+Wenn dort steht:
+
+```text
+unable to find 'git': exec: "git": executable file not found
+```
+
+wird ebenfalls noch die ältere Git-Build-Variante verwendet.
+
+In beiden Fällen im Projekt unter **YAML-Konfiguration** den Inhalt durch die aktuelle `docker-compose.yml` aus `main` ersetzen, speichern und das Projekt neu erstellen.
 
 ## 6. EOS öffnen
 
@@ -154,21 +175,8 @@ Auf der Startseite befindet sich die **Schnelleinrichtung: Synology + Victron Ce
 
 Dort eintragen:
 
-### Standort
-
-- Breitengrad
-- Längengrad
-
-### Cerbo GX
-
-- IP-Adresse oder Hostname
-
-Port `502`, Unit ID `100` und die übrigen Standardwerte werden automatisch gesetzt.
-
-### PV-Anlage
-
-Für die erste Dachfläche:
-
+- Breitengrad und Längengrad
+- IP-Adresse oder Hostname des Cerbo GX
 - Modulneigung
 - Azimut
 - Modulleistung in Wp
@@ -203,21 +211,19 @@ PV-Istwertkorrektur:  aktiv
 
 ## 8. Mehrere Dachflächen
 
-Die Schnelleinrichtung legt zunächst eine PV-Fläche an.
-
-Für Ost/West-Anlagen oder mehrere Wechselrichter können anschließend unter **Config** weitere `pvforecast.planes` ergänzt werden.
+Die Schnelleinrichtung legt zunächst eine PV-Fläche an. Für Ost/West-Anlagen oder mehrere Wechselrichter können anschließend unter **Config** weitere `pvforecast.planes` ergänzt werden.
 
 ## 9. Update
 
-Im Container Manager das Projekt stoppen und **neu erstellen / neu bauen**. Dadurch wird der aktuelle `main`-Stand erneut verwendet.
+Für ein Update genügt es, das Projekt neu zu erstellen bzw. den Container neu zu erzeugen. Beim Start wird der aktuelle Quellcode von `main` erneut geladen.
 
-Nicht löschen:
+Der Ordner
 
 ```text
 /volume1/docker/eos-victron/synology-data/
 ```
 
-Die Browser-Konfiguration und Messhistorie bleiben dort erhalten.
+darf dabei nicht gelöscht werden.
 
 ## 10. Backup
 
@@ -237,32 +243,30 @@ Optional zusätzlich:
 
 ### `pull access denied for maxx3105/eos`
 
-Du verwendest eine alte Compose-Datei. Die aktuelle Datei muss einen `build:`-Block mit
+Alte Compose-Datei aktiv. Aktuelle YAML aus `main` übernehmen.
 
-```text
-https://github.com/maxx3105/EOS.git#main
-```
+### `unable to find 'git'`
 
-enthalten.
+Alte Git-Build-Compose aktiv. Aktuelle YAML aus `main` übernehmen; sie benötigt kein Git.
 
-### Build schlägt beim GitHub-Zugriff fehl
+### `EOS Victron: lade aktuellen Fork-Stand ...` schlägt fehl
 
 Prüfen:
 
 - NAS hat Internetzugriff
 - DNS funktioniert
-- `github.com` ist von der NAS erreichbar
+- `github.com` ist erreichbar
 
 ### Dashboard nicht erreichbar
 
 Prüfen:
 
 - Container läuft?
-- Port `8504` wurde veröffentlicht?
+- Port `8504` veröffentlicht?
 - NAS-Firewall erlaubt Port `8504`?
-- Port `8504` ist bereits belegt?
+- Port `8504` bereits belegt?
 
-Bei einer Portkollision können die Host-Ports in `docker-compose.yml` geändert werden:
+Bei einer Portkollision in `docker-compose.yml` ändern:
 
 ```yaml
 ports:
