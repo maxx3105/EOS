@@ -77,3 +77,36 @@ def test_seasonal_temperature_defaults_are_enabled_for_victron_history():
     assert settings.temperature_weighting is True
     assert settings.temperature_half_life_c == 4.0
     assert settings.temperature_history_key == "victron_outdoor_temp_c"
+
+
+def test_legacy_default_history_window_is_migrated_to_seasonal_profile():
+    settings = LoadVictronHistoryCommonSettings.model_validate(
+        {
+            "history_days": 28,
+            "recency_half_life_days": 7.0,
+            "recent_window_hours": 6.0,
+            "recent_blend": 0.15,
+            "min_slot_samples": 2,
+        }
+    )
+
+    assert settings.history_days == 90
+    assert settings.recency_half_life_days == 21.0
+    assert settings.seasonal_weighting is True
+    assert settings.temperature_weighting is True
+
+
+def test_explicit_new_history_settings_are_not_migrated():
+    settings = LoadVictronHistoryCommonSettings.model_validate(
+        {
+            "history_days": 28,
+            "recency_half_life_days": 7.0,
+            "seasonal_weighting": False,
+            "temperature_weighting": False,
+        }
+    )
+
+    assert settings.history_days == 28
+    assert settings.recency_half_life_days == 7.0
+    assert settings.seasonal_weighting is False
+    assert settings.temperature_weighting is False
