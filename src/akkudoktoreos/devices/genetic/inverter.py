@@ -1,3 +1,4 @@
+import os
 from typing import Optional
 
 from loguru import logger
@@ -5,6 +6,14 @@ from loguru import logger
 from akkudoktoreos.devices.genetic.battery import Battery
 from akkudoktoreos.optimization.genetic.geneticdevices import InverterParameters
 from akkudoktoreos.prediction.interpolator import get_eos_load_interpolator
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    """Read a conventional boolean environment flag."""
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 class Inverter:
@@ -29,6 +38,12 @@ class Inverter:
         self.dc_to_ac_efficiency = self.parameters.dc_to_ac_efficiency
         self.ac_to_dc_efficiency = self.parameters.ac_to_dc_efficiency
         self.max_ac_charge_power_w = self.parameters.max_ac_charge_power_w
+
+        # The Synology/Victron deployment is operated without permission for grid feed-in.
+        # Keep this deployment-specific instead of changing generic EOS behaviour globally.
+        # The real plant must still enforce zero feed-in in Victron ESS itself; this flag only
+        # makes the optimizer/simulation obey the same physical/legal boundary.
+        self.zero_feed_in = _env_flag("EOS_VICTRON_ZERO_FEED_IN")
 
     def process_energy(
         self, generation: float, consumption: float, hour: int
@@ -93,12 +108,18 @@ class Inverter:
                     else:
                         remaining_surplus = remaining_power
 
-                    # Feed-in to the grid based on remaining capacity
+                    # Feed-in to the grid based on remaining capacity.
+                    # In zero-feed-in mode the same surplus is treated as curtailed energy so
+                    # the optimizer will prefer local consumers (battery/EV) instead of export.
                     if remaining_surplus > self.max_power_wh - consumption:
                         grid_export = self.max_power_wh - consumption
                         losses += remaining_surplus - grid_export
                     else:
                         grid_export = remaining_surplus
+
+                    if self.zero_feed_in and grid_export > 0:
+                        losses += grid_export
+                        grid_export = 0.0
 
                     losses += charge_losses
                 self_consumption = (
