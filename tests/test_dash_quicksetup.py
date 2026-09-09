@@ -135,6 +135,9 @@ def test_quick_setup_builds_valid_rest_paths():
     assert updates["general/latitude"] == 47.4374
     assert updates["weather/provider"] == "OpenMeteo"
     assert updates["pvforecast/provider"] == "PVForecastPVLibVictron"
+    assert updates["load/provider"] == "LoadVictronHistory"
+    assert updates["measurement/load_emr_keys"] == ["victron_load_emr"]
+    assert updates["adapter/victron/load_energy_key"] == "victron_load_emr"
     assert updates["adapter/victron/host"] == "192.168.178.150"
     assert updates["adapter/victron/include_ac_coupled_pv"] is False
     assert updates["ems/mode"] == "PREDICTION"
@@ -161,6 +164,8 @@ def test_quick_setup_reads_saved_profile_back():
         "general": {"latitude": 47.4374, "longitude": 15.0036},
         "adapter": {"victron": {"host": "192.168.178.150"}},
         "pvforecast": {"planes": planes},
+        "load": {"provider": "LoadVictronHistory"},
+        "measurement": {"load_emr_keys": ["victron_load_emr"]},
         "devices": {
             "batteries": [battery],
             "inverters": inverters,
@@ -183,3 +188,5 @@ def test_quick_setup_reads_saved_profile_back():
     assert state["ev_count"] == 2
     assert state["ev_target_soc"] == 80
     assert state["ev_profile_active"] is True
+    assert state["load_provider"] == "LoadVictronHistory"
+    assert state["load_forecast_active"] is True
