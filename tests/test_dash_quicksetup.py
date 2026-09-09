@@ -5,6 +5,7 @@ import pytest
 from akkudoktoreos.server.dash.about import _SETUP_SCRIPT
 from akkudoktoreos.server.dash.quicksetup import (
     EVCS_MAX_POWER_W,
+    EV_TARGET_SOC_PERCENT,
     PYLONTECH_CAPACITY_WH,
     RENAULT_MEGANE_CAPACITY_WH,
     RENAULT_R5_CAPACITY_WH,
@@ -88,9 +89,10 @@ def test_pylontech_profile_and_multiplus_limits():
         assert inverter["dc_to_ac_efficiency"] == pytest.approx(0.95)
 
 
-def test_dual_evcs_renault_profile():
+def test_dual_evcs_renault_profile_defaults_to_80_percent():
     evs = build_electric_vehicles()
     assert len(evs) == 2
+    assert EV_TARGET_SOC_PERCENT == 80
 
     r5, megane = evs
     assert r5["device_id"] == "renault-r5"
@@ -103,6 +105,12 @@ def test_dual_evcs_renault_profile():
         assert ev["min_charge_power_w"] == 4100
         assert ev["charge_rates"][0] == 0.0
         assert ev["charge_rates"][-1] == 1.0
+        assert ev["max_soc_percentage"] == 80
+
+
+def test_ev_target_soc_is_configurable_without_departure_schedule():
+    evs = build_electric_vehicles(75)
+    assert all(ev["max_soc_percentage"] == 75 for ev in evs)
 
 
 def test_quick_setup_requires_confirmed_file_save():
@@ -120,6 +128,7 @@ def test_quick_setup_builds_valid_rest_paths():
         "south_azimuth": 180,
         "north_azimuth": 0,
         "min_soc": 10,
+        "ev_target_soc": 80,
     }
     updates = dict(build_quick_setup_updates(payload))
 
@@ -139,13 +148,15 @@ def test_quick_setup_builds_valid_rest_paths():
     assert len(updates["devices/electric_vehicles"]) == 2
     assert updates["devices/electric_vehicles"][0]["capacity_wh"] == 52000
     assert updates["devices/electric_vehicles"][1]["capacity_wh"] == 60000
+    assert updates["devices/electric_vehicles"][0]["max_soc_percentage"] == 80
+    assert updates["devices/electric_vehicles"][1]["max_soc_percentage"] == 80
 
 
 def test_quick_setup_reads_saved_profile_back():
     planes = build_victron_48v_planes(tilt=25, south_azimuth=180, north_azimuth=0)
     battery = build_pylontech_battery(10)
     inverters = build_multiplus_inverters()
-    evs = build_electric_vehicles()
+    evs = build_electric_vehicles(80)
     config = {
         "general": {"latitude": 47.4374, "longitude": 15.0036},
         "adapter": {"victron": {"host": "192.168.178.150"}},
@@ -170,4 +181,5 @@ def test_quick_setup_reads_saved_profile_back():
     assert state["min_soc"] == 10
     assert state["battery_profile_active"] is True
     assert state["ev_count"] == 2
+    assert state["ev_target_soc"] == 80
     assert state["ev_profile_active"] is True
