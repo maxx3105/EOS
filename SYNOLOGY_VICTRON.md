@@ -1,23 +1,19 @@
 # EOS + Victron Cerbo GX auf Synology DS920+
 
-Ziel dieser Variante ist eine Installation wie bei einem normalen Docker-Image:
+Diese Anleitung beschreibt den **aktuell funktionierenden Standardweg** für den Fork `maxx3105/EOS`.
+
+Die Synology benötigt nur **eine Compose-Datei**. Container Manager baut das Image direkt aus dem öffentlichen `main`-Branch des Forks. Es werden **kein Docker-Hub-Image, kein GitHub-Login, keine GitHub Actions, kein SSH, kein Git und keine ENV-Datei** benötigt.
 
 ```text
-Container Manager
-→ Registrierung
-→ maxx3105/eos suchen
-→ herunterladen
-→ ausführen
-→ http://NAS-IP:8504 öffnen
-→ Anlage im Browser einrichten
-```
-
-Für Endanwender werden **kein GitHub-Konto, kein Git, kein SSH, kein Compose und keine ENV-Datei** benötigt.
-
-Das öffentliche Docker-Hub-Image lautet:
-
-```text
-maxx3105/eos:latest
+1 Datei: docker-compose.yml
+        ↓
+Container Manager → Projekt → Erstellen
+        ↓
+EOS wird direkt aus main gebaut
+        ↓
+http://NAS-IP:8504 öffnen
+        ↓
+Standort + Cerbo + PV-Anlage im Browser einrichten
 ```
 
 > Der Victron-Adapter arbeitet in dieser Ausbaustufe nur lesend. EOS schreibt keine ESS-Sollwerte und verändert keine Cerbo- oder Wechselrichter-Einstellungen.
@@ -48,99 +44,115 @@ Danach:
 
 Standard-Port ist TCP `502`.
 
-## 2. Image im Synology Container Manager suchen
+## 2. Ordner auf der Synology anlegen
+
+In **File Station**:
+
+```text
+/volume1/docker/eos-victron
+```
+
+In diesen Ordner kommt nur:
+
+```text
+/volume1/docker/eos-victron/
+├── docker-compose.yml
+└── synology-data/   # wird für persistente Daten verwendet
+```
+
+## 3. Richtige Compose-Datei herunterladen
+
+Verwende aus `main` entweder:
+
+```text
+synology/docker-compose.yml
+```
+
+oder die identische Datei:
+
+```text
+docker-compose.synology.yaml
+```
+
+Auf der NAS muss sie als
+
+```text
+docker-compose.yml
+```
+
+liegen.
+
+Die funktionierende Datei enthält unter anderem:
+
+```yaml
+services:
+  eos:
+    container_name: eos-victron
+    image: eos-victron:local
+    build:
+      context: "https://github.com/maxx3105/EOS.git#main"
+      dockerfile: Dockerfile
+```
+
+**Wichtig:** Wenn in deiner Datei stattdessen
+
+```yaml
+image: maxx3105/eos:latest
+```
+
+steht, ist das eine alte/falsche Datei. Dieses Docker-Hub-Image ist für diesen Installationsweg nicht erforderlich.
+
+## 4. Projekt im Container Manager erstellen
 
 DSM öffnen:
 
 ```text
 Container Manager
-→ Registrierung
+→ Projekt
+→ Erstellen
 ```
 
-Nach folgendem Image suchen:
+Eintragen:
 
 ```text
-maxx3105/eos
+Projektname: eos-victron
+Pfad:        /volume1/docker/eos-victron
 ```
 
-Das Image auswählen und herunterladen.
+Als Compose-Datei die dort liegende `docker-compose.yml` verwenden.
 
-Als Tag verwenden:
+Projekt erstellen und starten.
+
+Beim ersten Start baut die DS920+ das Image selbst aus `main`. Das dauert länger als ein normaler Containerstart und kann die CPU vorübergehend deutlich auslasten.
+
+## 5. Woran erkenne ich den richtigen Ablauf?
+
+Richtig ist, wenn Container Manager einen **Build** startet.
+
+Falsch ist, wenn im Terminal steht:
 
 ```text
-latest
+eos Pulling
+pull access denied for maxx3105/eos
 ```
 
-Die DS920+ verwendet automatisch die `linux/amd64`-Variante des Multi-Arch-Images.
+Dann wird noch eine alte Compose-Datei verwendet. Projekt schließen/löschen, die aktuelle `docker-compose.yml` aus `main` verwenden und das Projekt neu erstellen.
 
-## 3. Container starten
+## 6. EOS öffnen
 
-Nach dem Download:
+Wenn die NAS zum Beispiel `192.168.1.20` hat:
 
 ```text
-Container Manager
-→ Image
-→ maxx3105/eos:latest
-→ Ausführen
+Dashboard: http://192.168.1.20:8504
+API:       http://192.168.1.20:8503
+API-Doku:  http://192.168.1.20:8503/docs
 ```
 
-Containername zum Beispiel:
+## 7. Browser-Schnelleinrichtung
 
-```text
-eos
-```
+Auf der Startseite befindet sich die **Schnelleinrichtung: Synology + Victron Cerbo GX**.
 
-### Ports
-
-Diese Ports zuordnen:
-
-```text
-Lokaler Port 8503 → Container-Port 8503
-Lokaler Port 8504 → Container-Port 8504
-```
-
-### Persistenter Speicher
-
-In File Station zunächst beispielsweise anlegen:
-
-```text
-/volume1/docker/eos
-```
-
-Diesen Ordner im Container als Volume einbinden:
-
-```text
-/volume1/docker/eos → /data
-```
-
-Dadurch bleiben Konfiguration, Datenbank und Messhistorie bei Image-Updates erhalten.
-
-Weitere Umgebungsvariablen sind für die Standardinstallation nicht nötig.
-
-Container anschließend starten.
-
-## 4. EOS im Browser öffnen
-
-Wenn die Synology beispielsweise `192.168.1.20` hat:
-
-```text
-http://192.168.1.20:8504
-```
-
-Zusätzlich:
-
-```text
-API:      http://192.168.1.20:8503
-API-Doku: http://192.168.1.20:8503/docs
-```
-
-Das Docker-Image bindet API und Dashboard bereits standardmäßig auf alle Container-Netzwerkschnittstellen, damit keine zusätzlichen Docker-Variablen gesetzt werden müssen.
-
-## 5. Browser-Schnelleinrichtung
-
-Auf der EOSdash-Startseite befindet sich die **Schnelleinrichtung: Synology + Victron Cerbo GX**.
-
-Dort werden eingetragen:
+Dort eintragen:
 
 ### Standort
 
@@ -189,70 +201,76 @@ Cerbo-Unit-ID:        100
 PV-Istwertkorrektur:  aktiv
 ```
 
-## 6. Mehrere Dachflächen
+## 8. Mehrere Dachflächen
 
 Die Schnelleinrichtung legt zunächst eine PV-Fläche an.
 
 Für Ost/West-Anlagen oder mehrere Wechselrichter können anschließend unter **Config** weitere `pvforecast.planes` ergänzt werden.
 
-## 7. Update
+## 9. Update
 
-In Container Manager:
+Im Container Manager das Projekt stoppen und **neu erstellen / neu bauen**. Dadurch wird der aktuelle `main`-Stand erneut verwendet.
 
-```text
-Registrierung
-→ maxx3105/eos
-→ latest erneut herunterladen
-```
-
-Danach den bestehenden Container mit dem neuen Image neu erstellen bzw. aktualisieren.
-
-Der Ordner
+Nicht löschen:
 
 ```text
-/volume1/docker/eos
+/volume1/docker/eos-victron/synology-data/
 ```
 
-bleibt erhalten und wird wieder nach `/data` eingebunden.
+Die Browser-Konfiguration und Messhistorie bleiben dort erhalten.
 
-## 8. Backup
+## 10. Backup
 
-Für das EOS-Backup reicht im Wesentlichen:
+In **Hyper Backup** mindestens sichern:
 
 ```text
-/volume1/docker/eos/
+/volume1/docker/eos-victron/synology-data/
 ```
 
-Diesen Ordner in **Hyper Backup** aufnehmen.
+Optional zusätzlich:
 
-Das Image selbst muss nicht gesichert werden; es kann erneut über Container Manager heruntergeladen werden.
+```text
+/volume1/docker/eos-victron/docker-compose.yml
+```
 
-## 9. Fehlerbehebung
+## 11. Fehlerbehebung
 
-### `maxx3105/eos` wird in der Registrierung nicht gefunden
+### `pull access denied for maxx3105/eos`
 
-Prüfen, ob das Docker-Hub-Repository öffentlich ist und mindestens ein Tag wie `latest` veröffentlicht wurde.
+Du verwendest eine alte Compose-Datei. Die aktuelle Datei muss einen `build:`-Block mit
+
+```text
+https://github.com/maxx3105/EOS.git#main
+```
+
+enthalten.
+
+### Build schlägt beim GitHub-Zugriff fehl
+
+Prüfen:
+
+- NAS hat Internetzugriff
+- DNS funktioniert
+- `github.com` ist von der NAS erreichbar
 
 ### Dashboard nicht erreichbar
 
 Prüfen:
 
 - Container läuft?
-- Port `8504` wurde auf den Host gemappt?
+- Port `8504` wurde veröffentlicht?
 - NAS-Firewall erlaubt Port `8504`?
-- Port `8504` ist nicht bereits belegt?
+- Port `8504` ist bereits belegt?
 
-Falls `8504` belegt ist, kann als lokaler Port z. B. `18504` verwendet werden:
+Bei einer Portkollision können die Host-Ports in `docker-compose.yml` geändert werden:
 
-```text
-Lokaler Port 18504 → Container-Port 8504
+```yaml
+ports:
+  - "18503:8503"
+  - "18504:8504"
 ```
 
-Dann lautet die Adresse:
-
-```text
-http://NAS-IP:18504
-```
+Dann ist das Dashboard unter `http://NAS-IP:18504` erreichbar.
 
 ### Cerbo nicht erreichbar
 
@@ -269,7 +287,7 @@ Prüfen:
 
 Direkt nach dem ersten Start fehlen zunächst historische Cerbo-Messungen. EOS verwendet vorübergehend die reine PVLib-Prognose. Sobald genügend aktuelle Messwerte vorhanden sind, wird die Istwertkorrektur automatisch wirksam.
 
-## 10. Sicherheit
+## 12. Sicherheit
 
 Nicht direkt ins Internet weiterleiten:
 
