@@ -65,8 +65,37 @@ class VictronAdapterCommonSettings(SettingsBaseModel):
         min_length=1,
         json_schema_extra={
             "description": (
-                "EOS measurement key used for the cumulative site-load counter [kWh]. "
-                "The adapter creates this counter by integrating Cerbo system load power."
+                "EOS measurement key used for the cumulative total site-load counter [kWh]. "
+                "This value includes EV charging."
+            )
+        },
+    )
+    base_load_energy_key: str = Field(
+        default="victron_base_load_emr",
+        min_length=1,
+        json_schema_extra={
+            "description": (
+                "EOS measurement key used for site load after subtracting configured EV chargers. "
+                "LoadVictronHistory should learn from this counter when EVCS unit IDs are configured."
+            )
+        },
+    )
+    evcs_unit_ids: list[int] = Field(
+        default_factory=list,
+        json_schema_extra={
+            "description": (
+                "Modbus TCP unit IDs of com.victronenergy.evcharger services exposed by the GX device."
+            ),
+            "examples": [[40, 41]],
+        },
+    )
+    evcs_energy_key_prefix: str = Field(
+        default="victron_evcs",
+        min_length=1,
+        json_schema_extra={
+            "description": (
+                "Prefix for locally integrated EVCS energy counters. Unit ID 40 becomes "
+                "'<prefix>_40_emr'."
             )
         },
     )
@@ -96,20 +125,25 @@ class VictronAdapterCommonSettings(SettingsBaseModel):
 class VictronAdapter(AdapterProvider):
     """Read-only Cerbo GX adapter for PV feedback and basic system telemetry."""
 
+    _EVCS_FIRST_REGISTER: ClassVar[int] = 3818
+    _EVCS_REGISTER_COUNT: ClassVar[int] = 7  # 3818..3824
+
     connected: bool = Field(default=False)
     last_error: Optional[str] = Field(default=None)
     pv_power_w: Optional[float] = Field(default=None)
     grid_power_w: Optional[float] = Field(default=None)
     load_power_w: Optional[float] = Field(default=None)
+    base_load_power_w: Optional[float] = Field(default=None)
     battery_power_w: Optional[float] = Field(default=None)
     battery_soc_percent: Optional[float] = Field(default=None)
+    evcs_power_w: dict[int, float] = Field(default_factory=dict)
+    evcs_current_a: dict[int, float] = Field(default_factory=dict)
+    evcs_status: dict[int, int] = Field(default_factory=dict)
+    evcs_errors: dict[int, str] = Field(default_factory=dict)
 
-    _last_sample_time: Optional[DateTime] = PrivateAttr(default=None)
-    _last_pv_power_w: Optional[float] = PrivateAttr(default=None)
-    _pv_energy_kwh: Optional[float] = PrivateAttr(default=None)
-    _last_load_sample_time: Optional[DateTime] = PrivateAttr(default=None)
-    _last_load_power_w: Optional[float] = PrivateAttr(default=None)
-    _load_energy_kwh: Optional[float] = PrivateAttr(default=None)
+    _energy_kwh_by_key: dict[str, float] = PrivateAttr(default_factory=dict)
+    _last_energy_sample_time_by_key: dict[str, DateTime] = PrivateAttr(default_factory=dict)
+    _last_energy_power_w_by_key: dict[str, float] = PrivateAttr(default_factory=dict)
 
     @classmethod
     def provider_id(cls) -> str:
@@ -153,7 +187,14 @@ class VictronAdapter(AdapterProvider):
             valid = [max(0.0, float(value)) for value in valid]
         return float(sum(valid))
 
-    def _read_holding_registers(self, address: int, count: int) -> list[int]:
+    @staticmethod
+    def _calculate_base_load_power(site_load_w: float, evcs_powers_w: list[float]) -> float:
+        """Return non-EV site load without ever creating a negative base load."""
+        return max(0.0, float(site_load_w) - sum(max(0.0, float(v)) for v in evcs_powers_w))
+
+    def _read_holding_registers(
+        self, address: int, count: int, *, unit_id: Optional[int] = None
+    ) -> list[int]:
         """Read Modbus holding registers using only the Python standard library."""
         settings = self.config.adapter.victron
         if not settings.host:
@@ -161,13 +202,17 @@ class VictronAdapter(AdapterProvider):
         if count < 1 or count > 125:
             raise ValueError(f"Invalid Modbus register count: {count}")
 
+        target_unit_id = settings.unit_id if unit_id is None else int(unit_id)
+        if target_unit_id < 0 or target_unit_id > 255:
+            raise ValueError(f"Invalid Modbus unit ID: {target_unit_id}")
+
         transaction_id = int(time.monotonic_ns()) & 0xFFFF
         request = struct.pack(
             ">HHHBBHH",
             transaction_id,
             0,
             6,
-            settings.unit_id,
+            target_unit_id,
             3,
             address,
             count,
@@ -185,8 +230,11 @@ class VictronAdapter(AdapterProvider):
                     raise ConnectionError("Unexpected Modbus transaction ID from Cerbo GX")
                 if protocol_id != 0:
                     raise ConnectionError("Invalid Modbus protocol ID from Cerbo GX")
-                if response_unit != settings.unit_id:
-                    raise ConnectionError("Unexpected Modbus unit ID from Cerbo GX")
+                if response_unit != target_unit_id:
+                    raise ConnectionError(
+                        f"Unexpected Modbus unit ID from Cerbo GX: expected {target_unit_id}, "
+                        f"got {response_unit}"
+                    )
                 if length < 3:
                     raise ConnectionError("Truncated Modbus response from Cerbo GX")
                 pdu = self._recv_exact(sock, length - 1)
@@ -199,7 +247,8 @@ class VictronAdapter(AdapterProvider):
         if function_code & 0x80:
             exception_code = pdu[1] if len(pdu) > 1 else -1
             raise ConnectionError(
-                f"Cerbo GX Modbus exception {exception_code} while reading register {address}"
+                f"Cerbo GX Modbus exception {exception_code} on unit {target_unit_id} "
+                f"while reading register {address}"
             )
         if function_code != 3:
             raise ConnectionError(f"Unexpected Modbus function code {function_code}")
@@ -248,6 +297,43 @@ class VictronAdapter(AdapterProvider):
             "battery_soc_percent": float(battery_soc) if battery_soc is not None else None,
         }
 
+    @classmethod
+    def _decode_evcs_registers(cls, registers: list[int]) -> dict[str, Optional[float]]:
+        """Decode EV Charging Station registers 3818..3824.
+
+        3818..3820 are phase powers, 3821 is total power, 3823 is charge current and
+        3824 is charger status. All values used here are read-only.
+        """
+        if len(registers) != cls._EVCS_REGISTER_COUNT:
+            raise ValueError(
+                f"Expected {cls._EVCS_REGISTER_COUNT} EVCS registers, got {len(registers)}"
+            )
+
+        phase_power = [cls._decode_uint16(registers[offset]) for offset in range(3)]
+        total_power = cls._decode_uint16(registers[3])
+        if total_power is None:
+            total_power = cls._sum_available(
+                [float(value) if value is not None else None for value in phase_power],
+                clamp_nonnegative=True,
+            )
+
+        current = cls._decode_uint16(registers[5])
+        status = cls._decode_uint16(registers[6])
+        return {
+            "power_w": float(total_power) if total_power is not None else None,
+            "current_a": float(current) if current is not None else None,
+            "status": float(status) if status is not None else None,
+        }
+
+    def _read_evcs_snapshot(self, unit_id: int) -> dict[str, Optional[float]]:
+        """Read one com.victronenergy.evcharger service from the GX Modbus gateway."""
+        registers = self._read_holding_registers(
+            self._EVCS_FIRST_REGISTER,
+            self._EVCS_REGISTER_COUNT,
+            unit_id=unit_id,
+        )
+        return self._decode_evcs_registers(registers)
+
     def _ensure_pv_measurement_key(self) -> str:
         """Register the generated Victron PV energy counter as a PV production measurement."""
         key = self.config.adapter.victron.pv_energy_key
@@ -258,15 +344,25 @@ class VictronAdapter(AdapterProvider):
             self.config.measurement.pv_production_emr_keys = [*keys, key]
         return key
 
-    def _ensure_load_measurement_key(self) -> str:
-        """Register the generated Cerbo site-load energy counter as an EOS load measurement."""
-        key = self.config.adapter.victron.load_energy_key
-        keys = self.config.measurement.load_emr_keys
-        if keys is None:
-            self.config.measurement.load_emr_keys = [key]
-        elif key not in keys:
-            self.config.measurement.load_emr_keys = [*keys, key]
-        return key
+    def _ensure_load_forecast_measurement_key(self) -> str:
+        """Select total load or EV-cleaned base load as the forecast learning source."""
+        settings = self.config.adapter.victron
+        desired = settings.base_load_energy_key if settings.evcs_unit_ids else settings.load_energy_key
+        current = list(self.config.measurement.load_emr_keys or [])
+
+        # The two counters are alternative representations of the same site load and must never be
+        # summed together by Measurement.load_total_kwh(). Preserve unrelated load meters.
+        owned = {settings.load_energy_key, settings.base_load_energy_key}
+        new_keys = [key for key in current if key not in owned]
+        if desired not in new_keys:
+            new_keys.append(desired)
+        if current != new_keys:
+            self.config.measurement.load_emr_keys = new_keys
+        return desired
+
+    def _evcs_energy_key(self, unit_id: int) -> str:
+        settings = self.config.adapter.victron
+        return f"{settings.evcs_energy_key_prefix}_{unit_id}_emr"
 
     def _battery_soc_measurement_key(self) -> Optional[str]:
         """Return the EOS SoC measurement key for the configured aggregate battery."""
@@ -289,71 +385,60 @@ class VictronAdapter(AdapterProvider):
             return
         await self.measurement.update_value(sample_time, key, battery_soc_percent / 100.0)
 
-    async def _restore_pv_energy(self, key: str) -> float:
-        """Restore the latest generated cumulative PV energy value after a restart."""
-        if self._pv_energy_kwh is not None:
-            return self._pv_energy_kwh
+    async def _restore_integrated_energy(self, key: str) -> float:
+        """Restore a locally integrated cumulative energy counter after a restart."""
+        if key in self._energy_kwh_by_key:
+            return self._energy_kwh_by_key[key]
         try:
             series = await self.measurement.key_to_raw_series(key=key, dropna=True)
-            self._pv_energy_kwh = float(series.iloc[-1]) if not series.empty else 0.0
+            value = float(series.iloc[-1]) if not series.empty else 0.0
         except (KeyError, TypeError, ValueError):
-            self._pv_energy_kwh = 0.0
-        return self._pv_energy_kwh
+            value = 0.0
+        self._energy_kwh_by_key[key] = value
+        return value
 
-    async def _restore_load_energy(self, key: str) -> float:
-        """Restore the latest generated cumulative site-load energy value after a restart."""
-        if self._load_energy_kwh is not None:
-            return self._load_energy_kwh
-        try:
-            series = await self.measurement.key_to_raw_series(key=key, dropna=True)
-            self._load_energy_kwh = float(series.iloc[-1]) if not series.empty else 0.0
-        except (KeyError, TypeError, ValueError):
-            self._load_energy_kwh = 0.0
-        return self._load_energy_kwh
+    def _break_energy_integration(self, key: str) -> None:
+        """Prevent interpolation across an interval whose component measurement was unavailable."""
+        self._last_energy_sample_time_by_key.pop(key, None)
+        self._last_energy_power_w_by_key.pop(key, None)
+
+    async def _store_integrated_energy(
+        self, sample_time: DateTime, key: str, power_w: float, *, label: str
+    ) -> None:
+        """Integrate power into a restart-safe cumulative local energy meter [kWh]."""
+        energy_kwh = await self._restore_integrated_energy(key)
+        last_time = self._last_energy_sample_time_by_key.get(key)
+        last_power = self._last_energy_power_w_by_key.get(key)
+
+        if last_time is not None and last_power is not None:
+            delta_seconds = (sample_time - last_time).total_seconds()
+            max_gap_seconds = self.config.adapter.victron.max_integration_gap_minutes * 60.0
+            if 0 < delta_seconds <= max_gap_seconds:
+                average_power_w = (last_power + power_w) / 2.0
+                energy_kwh += average_power_w * delta_seconds / 3_600_000.0
+                self._energy_kwh_by_key[key] = energy_kwh
+            elif delta_seconds > max_gap_seconds:
+                logger.warning(
+                    "Skipping {} energy integration over a {:.1f} minute data gap",
+                    label,
+                    delta_seconds / 60.0,
+                )
+
+        await self.measurement.update_value(sample_time, key, energy_kwh)
+        self._last_energy_sample_time_by_key[key] = sample_time
+        self._last_energy_power_w_by_key[key] = power_w
 
     async def _store_pv_energy(self, sample_time: DateTime, pv_power_w: float) -> None:
-        """Integrate PV power into the cumulative EOS PV production meter [kWh]."""
         key = self._ensure_pv_measurement_key()
-        energy_kwh = await self._restore_pv_energy(key)
+        await self._store_integrated_energy(sample_time, key, pv_power_w, label="Victron PV")
 
-        if self._last_sample_time is not None and self._last_pv_power_w is not None:
-            delta_seconds = (sample_time - self._last_sample_time).total_seconds()
-            max_gap_seconds = self.config.adapter.victron.max_integration_gap_minutes * 60.0
-            if 0 < delta_seconds <= max_gap_seconds:
-                average_power_w = (self._last_pv_power_w + pv_power_w) / 2.0
-                energy_kwh += average_power_w * delta_seconds / 3_600_000.0
-                self._pv_energy_kwh = energy_kwh
-            elif delta_seconds > max_gap_seconds:
-                logger.warning(
-                    "Skipping Victron PV energy integration over a {:.1f} minute data gap",
-                    delta_seconds / 60.0,
-                )
+    async def _store_site_load_energy(self, sample_time: DateTime, load_power_w: float) -> None:
+        key = self.config.adapter.victron.load_energy_key
+        await self._store_integrated_energy(sample_time, key, load_power_w, label="Victron site load")
 
-        await self.measurement.update_value(sample_time, key, energy_kwh)
-        self._last_sample_time = sample_time
-        self._last_pv_power_w = pv_power_w
-
-    async def _store_load_energy(self, sample_time: DateTime, load_power_w: float) -> None:
-        """Integrate Cerbo site load into the cumulative EOS load meter [kWh]."""
-        key = self._ensure_load_measurement_key()
-        energy_kwh = await self._restore_load_energy(key)
-
-        if self._last_load_sample_time is not None and self._last_load_power_w is not None:
-            delta_seconds = (sample_time - self._last_load_sample_time).total_seconds()
-            max_gap_seconds = self.config.adapter.victron.max_integration_gap_minutes * 60.0
-            if 0 < delta_seconds <= max_gap_seconds:
-                average_power_w = (self._last_load_power_w + load_power_w) / 2.0
-                energy_kwh += average_power_w * delta_seconds / 3_600_000.0
-                self._load_energy_kwh = energy_kwh
-            elif delta_seconds > max_gap_seconds:
-                logger.warning(
-                    "Skipping Victron load energy integration over a {:.1f} minute data gap",
-                    delta_seconds / 60.0,
-                )
-
-        await self.measurement.update_value(sample_time, key, energy_kwh)
-        self._last_load_sample_time = sample_time
-        self._last_load_power_w = load_power_w
+    async def _store_base_load_energy(self, sample_time: DateTime, base_load_power_w: float) -> None:
+        key = self.config.adapter.victron.base_load_energy_key
+        await self._store_integrated_energy(sample_time, key, base_load_power_w, label="Victron base load")
 
     async def _update_data(self) -> None:
         """Poll the Cerbo GX during the EOS data-acquisition stage."""
@@ -361,6 +446,7 @@ class VictronAdapter(AdapterProvider):
             return
 
         sample_time = to_datetime(in_timezone=self.config.general.timezone)
+        settings = self.config.adapter.victron
         try:
             snapshot = await asyncio.to_thread(self._read_system_snapshot)
             pv_power = snapshot["pv_power_w"]
@@ -373,19 +459,79 @@ class VictronAdapter(AdapterProvider):
             self.battery_power_w = snapshot["battery_power_w"]
             self.battery_soc_percent = snapshot["battery_soc_percent"]
 
+            self._ensure_load_forecast_measurement_key()
             await self._store_pv_energy(sample_time, self.pv_power_w)
             if self.load_power_w is not None:
-                await self._store_load_energy(sample_time, max(0.0, float(self.load_power_w)))
+                await self._store_site_load_energy(
+                    sample_time, max(0.0, float(self.load_power_w))
+                )
             await self._store_battery_soc(sample_time, self.battery_soc_percent)
+
+            evcs_power: dict[int, float] = {}
+            evcs_current: dict[int, float] = {}
+            evcs_status: dict[int, int] = {}
+            evcs_errors: dict[int, str] = {}
+            unit_ids = list(dict.fromkeys(int(value) for value in settings.evcs_unit_ids))
+
+            for unit_id in unit_ids:
+                energy_key = self._evcs_energy_key(unit_id)
+                try:
+                    evcs = await asyncio.to_thread(self._read_evcs_snapshot, unit_id)
+                    power = evcs["power_w"]
+                    if power is None:
+                        raise ValueError("EVCS returned no usable /Ac/Power value")
+                    power = max(0.0, float(power))
+                    evcs_power[unit_id] = power
+                    if evcs["current_a"] is not None:
+                        evcs_current[unit_id] = float(evcs["current_a"])
+                    if evcs["status"] is not None:
+                        evcs_status[unit_id] = int(evcs["status"])
+                    await self._store_integrated_energy(
+                        sample_time,
+                        energy_key,
+                        power,
+                        label=f"Victron EVCS unit {unit_id}",
+                    )
+                except Exception as exc:
+                    evcs_errors[unit_id] = str(exc)
+                    self._break_energy_integration(energy_key)
+                    logger.warning("Victron EVCS unit {} read failed: {}", unit_id, exc)
+
+            self.evcs_power_w = evcs_power
+            self.evcs_current_a = evcs_current
+            self.evcs_status = evcs_status
+            self.evcs_errors = evcs_errors
+
+            base_energy_key = settings.base_load_energy_key
+            if unit_ids:
+                if self.load_power_w is not None and len(evcs_power) == len(unit_ids):
+                    base_load = self._calculate_base_load_power(
+                        float(self.load_power_w), list(evcs_power.values())
+                    )
+                    self.base_load_power_w = base_load
+                    await self._store_base_load_energy(sample_time, base_load)
+                else:
+                    # Do not bridge over intervals with an unknown EV component; otherwise an EV
+                    # session could leak back into the learned household base load.
+                    self.base_load_power_w = None
+                    self._break_energy_integration(base_energy_key)
+            else:
+                self.base_load_power_w = (
+                    max(0.0, float(self.load_power_w)) if self.load_power_w is not None else None
+                )
 
             self.connected = True
             self.last_error = None
             self.update_datetime = sample_time
+            ev_total = sum(evcs_power.values()) if unit_ids and not evcs_errors else None
             logger.info(
-                "Victron GX: PV={:.0f} W, grid={} W, load={} W, battery={} W, SoC={} %",
+                "Victron GX: PV={:.0f} W, grid={} W, load={} W, base={} W, EV={} W, "
+                "battery={} W, SoC={} %",
                 self.pv_power_w,
                 f"{self.grid_power_w:.0f}" if self.grid_power_w is not None else "n/a",
                 f"{self.load_power_w:.0f}" if self.load_power_w is not None else "n/a",
+                f"{self.base_load_power_w:.0f}" if self.base_load_power_w is not None else "n/a",
+                f"{ev_total:.0f}" if ev_total is not None else ("n/a" if unit_ids else "0"),
                 f"{self.battery_power_w:.0f}" if self.battery_power_w is not None else "n/a",
                 f"{self.battery_soc_percent:.0f}" if self.battery_soc_percent is not None else "n/a",
             )
