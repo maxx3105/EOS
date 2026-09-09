@@ -16,6 +16,7 @@ MULTIPLUS_CHARGE_POWER_W = 7_350
 EVCS_COUNT = 2
 EVCS_MAX_CURRENT_A = 16
 EVCS_MAX_POWER_W = 11_000
+EV_TARGET_SOC_PERCENT = 80
 RENAULT_R5_CAPACITY_WH = 52_000
 RENAULT_MEGANE_CAPACITY_WH = 60_000
 
@@ -103,12 +104,18 @@ def build_multiplus_inverters() -> list[dict[str, Any]]:
     ]
 
 
-def build_electric_vehicles() -> list[dict[str, Any]]:
-    """Build the two Renault EVs assigned to the 16 A three-phase charging points.
+def build_electric_vehicles(
+    target_soc_percentage: int = EV_TARGET_SOC_PERCENT,
+) -> list[dict[str, Any]]:
+    """Build EVs for surplus charging without a fixed departure deadline.
 
-    The charge-rate factors represent useful current steps between roughly 6 A and 16 A.
+    ``max_soc_percentage`` is used as the preferred upper SOC boundary. No departure time
+    is configured because the installation is operated around a rotating four-shift schedule.
     The system remains prediction-only, so these settings do not actuate either EVCS.
     """
+    if not 0 <= target_soc_percentage <= 100:
+        raise ValueError("EV-Ziel-SOC muss zwischen 0 und 100 % liegen.")
+
     charge_rates = [0.0, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0]
 
     def vehicle(device_id: str, capacity_wh: int) -> dict[str, Any]:
@@ -121,7 +128,7 @@ def build_electric_vehicles() -> list[dict[str, Any]]:
             "min_charge_power_w": 4_100,
             "charge_rates": charge_rates,
             "min_soc_percentage": 0,
-            "max_soc_percentage": 100,
+            "max_soc_percentage": target_soc_percentage,
         }
 
     return [
@@ -146,7 +153,14 @@ def build_quick_setup_updates(payload: dict[str, Any]) -> list[tuple[str, Any]]:
     tilt = _number(payload, "tilt", "Modulneigung")
     south_azimuth = _number(payload, "south_azimuth", "Süd-Azimut")
     north_azimuth = _number(payload, "north_azimuth", "Nord-Azimut")
-    min_soc = int(_number(payload, "min_soc", "Mindest-SOC"))
+    min_soc = int(_number(payload, "min_soc", "Mindest-SOC / Inselreserve"))
+    try:
+        ev_target_soc = int(float(payload.get("ev_target_soc", EV_TARGET_SOC_PERCENT)))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("EV-Ziel-SOC ist ungültig.") from exc
+    if not 0 <= ev_target_soc <= 100:
+        raise ValueError("EV-Ziel-SOC muss zwischen 0 und 100 % liegen.")
+
     planes = build_victron_48v_planes(
         tilt=tilt,
         south_azimuth=south_azimuth,
@@ -175,7 +189,7 @@ def build_quick_setup_updates(payload: dict[str, Any]) -> list[tuple[str, Any]]:
         ("devices/max_inverters", 3),
         ("devices/inverters", build_multiplus_inverters()),
         ("devices/max_electric_vehicles", 2),
-        ("devices/electric_vehicles", build_electric_vehicles()),
+        ("devices/electric_vehicles", build_electric_vehicles(ev_target_soc)),
     ]
 
 
@@ -214,11 +228,15 @@ def quick_setup_state(config: dict[str, Any]) -> dict[str, Any]:
     ev_by_id = {str(ev.get("device_id")): ev for ev in valid_evs}
     r5 = ev_by_id.get("renault-r5", {})
     megane = ev_by_id.get("renault-megane-e-tech", {})
+    r5_target = r5.get("max_soc_percentage")
+    megane_target = megane.get("max_soc_percentage")
+    ev_target_soc = r5_target if r5_target is not None else EV_TARGET_SOC_PERCENT
     ev_profile_active = (
         r5.get("capacity_wh") == RENAULT_R5_CAPACITY_WH
         and megane.get("capacity_wh") == RENAULT_MEGANE_CAPACITY_WH
         and r5.get("max_charge_power_w") == EVCS_MAX_POWER_W
         and megane.get("max_charge_power_w") == EVCS_MAX_POWER_W
+        and r5_target == megane_target
     )
 
     return {
@@ -235,6 +253,7 @@ def quick_setup_state(config: dict[str, Any]) -> dict[str, Any]:
         "min_soc": min_soc,
         "battery_profile_active": battery_capacity == PYLONTECH_CAPACITY_WH and inverter_count == 3,
         "ev_count": len(valid_evs),
+        "ev_target_soc": ev_target_soc,
         "ev_profile_active": ev_profile_active,
         "configured": bool(_nested(config, "adapter", "victron", "host")),
     }
