@@ -4,7 +4,11 @@ import pytest
 
 from akkudoktoreos.server.dash.about import _SETUP_SCRIPT
 from akkudoktoreos.server.dash.quicksetup import (
+    EVCS_MAX_POWER_W,
     PYLONTECH_CAPACITY_WH,
+    RENAULT_MEGANE_CAPACITY_WH,
+    RENAULT_R5_CAPACITY_WH,
+    build_electric_vehicles,
     build_multiplus_inverters,
     build_pylontech_battery,
     build_quick_setup_updates,
@@ -30,6 +34,7 @@ def test_quick_setup_enables_read_only_victron_prediction_stack():
         '["prediction.hours", 48]',
         '["devices.max_batteries", 1]',
         '["devices.max_inverters", 3]',
+        '["devices.max_electric_vehicles", 2]',
     )
     for fragment in expected:
         assert fragment in _SETUP_SCRIPT
@@ -83,6 +88,23 @@ def test_pylontech_profile_and_multiplus_limits():
         assert inverter["dc_to_ac_efficiency"] == pytest.approx(0.95)
 
 
+def test_dual_evcs_renault_profile():
+    evs = build_electric_vehicles()
+    assert len(evs) == 2
+
+    r5, megane = evs
+    assert r5["device_id"] == "renault-r5"
+    assert r5["capacity_wh"] == RENAULT_R5_CAPACITY_WH == 52000
+    assert megane["device_id"] == "renault-megane-e-tech"
+    assert megane["capacity_wh"] == RENAULT_MEGANE_CAPACITY_WH == 60000
+
+    for ev in evs:
+        assert ev["max_charge_power_w"] == EVCS_MAX_POWER_W == 11000
+        assert ev["min_charge_power_w"] == 4100
+        assert ev["charge_rates"][0] == 0.0
+        assert ev["charge_rates"][-1] == 1.0
+
+
 def test_quick_setup_requires_confirmed_file_save():
     assert 'saveText.includes("Can not save actual config")' in _SETUP_SCRIPT
     assert '!saveText.includes("Saved configuration to")' in _SETUP_SCRIPT
@@ -113,17 +135,26 @@ def test_quick_setup_builds_valid_rest_paths():
     assert updates["devices/batteries"][0]["capacity_wh"] == 39552
     assert updates["devices/batteries"][0]["min_soc_percentage"] == 10
     assert len(updates["devices/inverters"]) == 3
+    assert updates["devices/max_electric_vehicles"] == 2
+    assert len(updates["devices/electric_vehicles"]) == 2
+    assert updates["devices/electric_vehicles"][0]["capacity_wh"] == 52000
+    assert updates["devices/electric_vehicles"][1]["capacity_wh"] == 60000
 
 
 def test_quick_setup_reads_saved_profile_back():
     planes = build_victron_48v_planes(tilt=25, south_azimuth=180, north_azimuth=0)
     battery = build_pylontech_battery(10)
     inverters = build_multiplus_inverters()
+    evs = build_electric_vehicles()
     config = {
         "general": {"latitude": 47.4374, "longitude": 15.0036},
         "adapter": {"victron": {"host": "192.168.178.150"}},
         "pvforecast": {"planes": planes},
-        "devices": {"batteries": [battery], "inverters": inverters},
+        "devices": {
+            "batteries": [battery],
+            "inverters": inverters,
+            "electric_vehicles": evs,
+        },
     }
 
     state = quick_setup_state(config)
@@ -138,3 +169,5 @@ def test_quick_setup_reads_saved_profile_back():
     assert state["battery_capacity_wh"] == 39552
     assert state["min_soc"] == 10
     assert state["battery_profile_active"] is True
+    assert state["ev_count"] == 2
+    assert state["ev_profile_active"] is True
