@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import ClassVar, Optional
 
 import numpy as np
 import pandas as pd
@@ -79,7 +79,7 @@ class LoadVictronHistory(LoadProvider):
     recent median site load is used as a conservative fallback.
     """
 
-    _interval_minutes = 15
+    _interval_minutes: ClassVar[int] = 15
 
     @classmethod
     def provider_id(cls) -> str:
