@@ -60,6 +60,16 @@ class VictronAdapterCommonSettings(SettingsBaseModel):
             )
         },
     )
+    load_energy_key: str = Field(
+        default="victron_load_emr",
+        min_length=1,
+        json_schema_extra={
+            "description": (
+                "EOS measurement key used for the cumulative site-load counter [kWh]. "
+                "The adapter creates this counter by integrating Cerbo system load power."
+            )
+        },
+    )
     include_ac_coupled_pv: bool = Field(
         default=True,
         json_schema_extra={
@@ -76,7 +86,7 @@ class VictronAdapterCommonSettings(SettingsBaseModel):
         json_schema_extra={
             "description": (
                 "Maximum gap between two Victron samples that is integrated into the "
-                "local PV energy counter. Larger gaps are skipped to avoid over-counting "
+                "local PV/load energy counters. Larger gaps are skipped to avoid over-counting "
                 "after network or NAS outages."
             )
         },
@@ -97,6 +107,9 @@ class VictronAdapter(AdapterProvider):
     _last_sample_time: Optional[DateTime] = PrivateAttr(default=None)
     _last_pv_power_w: Optional[float] = PrivateAttr(default=None)
     _pv_energy_kwh: Optional[float] = PrivateAttr(default=None)
+    _last_load_sample_time: Optional[DateTime] = PrivateAttr(default=None)
+    _last_load_power_w: Optional[float] = PrivateAttr(default=None)
+    _load_energy_kwh: Optional[float] = PrivateAttr(default=None)
 
     @classmethod
     def provider_id(cls) -> str:
@@ -245,6 +258,16 @@ class VictronAdapter(AdapterProvider):
             self.config.measurement.pv_production_emr_keys = [*keys, key]
         return key
 
+    def _ensure_load_measurement_key(self) -> str:
+        """Register the generated Cerbo site-load energy counter as an EOS load measurement."""
+        key = self.config.adapter.victron.load_energy_key
+        keys = self.config.measurement.load_emr_keys
+        if keys is None:
+            self.config.measurement.load_emr_keys = [key]
+        elif key not in keys:
+            self.config.measurement.load_emr_keys = [*keys, key]
+        return key
+
     def _battery_soc_measurement_key(self) -> Optional[str]:
         """Return the EOS SoC measurement key for the configured aggregate battery."""
         batteries = self.config.devices.batteries
@@ -277,6 +300,17 @@ class VictronAdapter(AdapterProvider):
             self._pv_energy_kwh = 0.0
         return self._pv_energy_kwh
 
+    async def _restore_load_energy(self, key: str) -> float:
+        """Restore the latest generated cumulative site-load energy value after a restart."""
+        if self._load_energy_kwh is not None:
+            return self._load_energy_kwh
+        try:
+            series = await self.measurement.key_to_raw_series(key=key, dropna=True)
+            self._load_energy_kwh = float(series.iloc[-1]) if not series.empty else 0.0
+        except (KeyError, TypeError, ValueError):
+            self._load_energy_kwh = 0.0
+        return self._load_energy_kwh
+
     async def _store_pv_energy(self, sample_time: DateTime, pv_power_w: float) -> None:
         """Integrate PV power into the cumulative EOS PV production meter [kWh]."""
         key = self._ensure_pv_measurement_key()
@@ -299,6 +333,28 @@ class VictronAdapter(AdapterProvider):
         self._last_sample_time = sample_time
         self._last_pv_power_w = pv_power_w
 
+    async def _store_load_energy(self, sample_time: DateTime, load_power_w: float) -> None:
+        """Integrate Cerbo site load into the cumulative EOS load meter [kWh]."""
+        key = self._ensure_load_measurement_key()
+        energy_kwh = await self._restore_load_energy(key)
+
+        if self._last_load_sample_time is not None and self._last_load_power_w is not None:
+            delta_seconds = (sample_time - self._last_load_sample_time).total_seconds()
+            max_gap_seconds = self.config.adapter.victron.max_integration_gap_minutes * 60.0
+            if 0 < delta_seconds <= max_gap_seconds:
+                average_power_w = (self._last_load_power_w + load_power_w) / 2.0
+                energy_kwh += average_power_w * delta_seconds / 3_600_000.0
+                self._load_energy_kwh = energy_kwh
+            elif delta_seconds > max_gap_seconds:
+                logger.warning(
+                    "Skipping Victron load energy integration over a {:.1f} minute data gap",
+                    delta_seconds / 60.0,
+                )
+
+        await self.measurement.update_value(sample_time, key, energy_kwh)
+        self._last_load_sample_time = sample_time
+        self._last_load_power_w = load_power_w
+
     async def _update_data(self) -> None:
         """Poll the Cerbo GX during the EOS data-acquisition stage."""
         if self.ems.stage() != EnergyManagementStage.DATA_ACQUISITION:
@@ -318,6 +374,8 @@ class VictronAdapter(AdapterProvider):
             self.battery_soc_percent = snapshot["battery_soc_percent"]
 
             await self._store_pv_energy(sample_time, self.pv_power_w)
+            if self.load_power_w is not None:
+                await self._store_load_energy(sample_time, max(0.0, float(self.load_power_w)))
             await self._store_battery_soc(sample_time, self.battery_soc_percent)
 
             self.connected = True
