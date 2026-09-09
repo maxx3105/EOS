@@ -7,7 +7,7 @@ from akkudoktoreos.config.configabc import runtime_environment
 from akkudoktoreos.core.coreabc import get_config
 from akkudoktoreos.core.version import __version__
 from akkudoktoreos.server.dash.markdown import Markdown
-from akkudoktoreos.server.dash.quicksetup import quick_setup_state
+from akkudoktoreos.server.dash.quicksetup import VICTRON_48V_PROFILE_NAME, quick_setup_state
 
 about_md = f"""![Logo](/eosdash/assets/logo.png)
 
@@ -57,12 +57,31 @@ function eosSetupNumber(id, label) {
     return value;
 }
 
-function eosSetupInteger(id, label) {
-    const value = eosSetupNumber(id, label);
-    if (!Number.isInteger(value) || value < 1) {
-        throw new Error(label + " muss eine positive ganze Zahl sein.");
-    }
-    return value;
+function eosVictronPlane(tilt, azimuth, modulePower, modulesPerString, strings, mpptPower) {
+    return {
+        surface_tilt: tilt,
+        surface_azimuth: azimuth,
+        peakpower: modulePower * modulesPerString * strings / 1000.0,
+        mountingplace: "building",
+        loss: 0.0,
+        trackingtype: 0,
+        albedo: 0.2,
+        module_model: String(modulePower),
+        // For PVLib the numerical inverter model acts as an output-stage proxy.
+        // The values below are the Victron 48-V MPPT nominal PV powers.
+        inverter_model: String(mpptPower),
+        modules_per_string: modulesPerString,
+        strings_per_inverter: strings
+    };
+}
+
+function eosBuildVictron48VPlanes(tilt, southAzimuth, northAzimuth) {
+    return [
+        eosVictronPlane(tilt, southAzimuth, 435, 5, 3, 5800),
+        eosVictronPlane(tilt, southAzimuth, 435, 5, 3, 5800),
+        eosVictronPlane(tilt, southAzimuth, 435, 4, 1, 3440),
+        eosVictronPlane(tilt, northAzimuth, 280, 5, 5, 5800)
+    ];
 }
 
 async function eosRunQuickSetup() {
@@ -82,31 +101,13 @@ async function eosRunQuickSetup() {
         if (!cerboHost) throw new Error("Bitte die IP-Adresse oder den Hostnamen des Cerbo GX eintragen.");
 
         const tilt = eosSetupNumber("eos-setup-tilt", "Modulneigung");
-        const azimuth = eosSetupNumber("eos-setup-azimuth", "Azimut");
+        const southAzimuth = eosSetupNumber("eos-setup-south-azimuth", "Süd-Azimut");
+        const northAzimuth = eosSetupNumber("eos-setup-north-azimuth", "Nord-Azimut");
         if (tilt < 0 || tilt > 90) throw new Error("Modulneigung muss zwischen 0 und 90° liegen.");
-        if (azimuth < 0 || azimuth > 360) throw new Error("Azimut muss zwischen 0 und 360° liegen.");
+        if (southAzimuth < 0 || southAzimuth > 360) throw new Error("Süd-Azimut muss zwischen 0 und 360° liegen.");
+        if (northAzimuth < 0 || northAzimuth > 360) throw new Error("Nord-Azimut muss zwischen 0 und 360° liegen.");
 
-        const modulePower = eosSetupNumber("eos-setup-module-power", "Modulleistung");
-        const modulesPerString = eosSetupInteger("eos-setup-modules-string", "Module pro String");
-        const stringsPerInverter = eosSetupInteger("eos-setup-strings", "Strings pro Wechselrichter");
-        const inverterPower = eosSetupNumber("eos-setup-inverter-power", "Wechselrichterleistung");
-
-        if (modulePower <= 0 || inverterPower <= 0) throw new Error("Leistungswerte müssen größer als 0 sein.");
-
-        const peakPowerKw = modulePower * modulesPerString * stringsPerInverter / 1000.0;
-        const plane = {
-            surface_tilt: tilt,
-            surface_azimuth: azimuth,
-            peakpower: peakPowerKw,
-            mountingplace: "building",
-            loss: 0.0,
-            trackingtype: 0,
-            albedo: 0.2,
-            module_model: String(modulePower),
-            inverter_model: String(inverterPower),
-            modules_per_string: modulesPerString,
-            strings_per_inverter: stringsPerInverter
-        };
+        const planes = eosBuildVictron48VPlanes(tilt, southAzimuth, northAzimuth);
 
         const updates = [
             ["general.latitude", latitude],
@@ -116,13 +117,13 @@ async function eosRunQuickSetup() {
             ["prediction.hours", 48],
             ["weather.provider", "OpenMeteo"],
             ["pvforecast.provider", "PVForecastPVLibVictron"],
-            ["pvforecast.planes", [plane]],
+            ["pvforecast.planes", planes],
             ["adapter.provider", ["Victron"]],
             ["adapter.victron.host", cerboHost],
             ["adapter.victron.port", 502],
             ["adapter.victron.unit_id", 100],
             ["adapter.victron.timeout_sec", 3.0],
-            ["adapter.victron.include_ac_coupled_pv", true],
+            ["adapter.victron.include_ac_coupled_pv", false],
             ["adapter.victron.pv_energy_key", "victron_pv_emr"],
             ["adapter.victron.max_integration_gap_minutes", 15.0]
         ];
@@ -143,7 +144,7 @@ async function eosRunQuickSetup() {
             throw new Error("Die Werte wurden an EOS übertragen, aber das dauerhafte Schreiben nach /data/config/EOS.config.json konnte nicht bestätigt werden.");
         }
 
-        status.textContent = "✓ Dauerhaft gespeichert. Die Seite wird neu geladen und liest die Werte aus EOS zurück …";
+        status.textContent = "✓ Dauerhaft gespeichert: 4 MPPT-Gruppen / 21,79 kWp. Die Seite wird neu geladen …";
         status.className = "mt-3 text-sm text-green-700 font-semibold";
         document.getElementById("eos-setup-next").style.display = "inline-block";
         setTimeout(() => window.location.reload(), 1200);
@@ -208,22 +209,27 @@ def QuickSetup() -> Div:
     """Simple first-run setup for the Synology + Victron use case."""
     state = _current_quick_setup_state()
     configured = bool(state.get("configured"))
+    profile_active = bool(state.get("profile_active"))
 
     return Div(
         H2("Schnelleinrichtung: Synology + Victron Cerbo GX", cls="text-2xl font-bold mb-2"),
         P(
-            "Die Felder zeigen die aktuell in EOS gespeicherten Werte. Nach dem Speichern wird die Seite automatisch neu geladen, damit du sofort siehst, was tatsächlich dauerhaft übernommen wurde.",
+            "Die Felder zeigen die aktuell in EOS gespeicherten Werte. Das PV-Profil bildet die vier vorhandenen Victron-MPPT-Gruppen getrennt ab.",
             cls="mb-2",
         ),
         P(
             "✓ Gespeicherte Cerbo-Konfiguration erkannt." if configured else "Noch keine Cerbo-Konfiguration gespeichert.",
-            cls="text-sm mb-4 text-green-700 font-semibold" if configured else "text-sm mb-4 opacity-70",
+            cls="text-sm mb-1 text-green-700 font-semibold" if configured else "text-sm mb-1 opacity-70",
+        ),
+        P(
+            "✓ 4-MPPT-Profil aktiv (21,79 kWp)." if profile_active else "Das 4-MPPT-Profil wird beim nächsten Speichern angewendet.",
+            cls="text-sm mb-4 text-green-700 font-semibold" if profile_active else "text-sm mb-4 opacity-70",
         ),
         Div(
             H2("1. Standort", cls="text-lg font-semibold mb-2"),
             Div(
-                _field("Breitengrad", "eos-setup-latitude", _display_value(state, "latitude", "48.2082"), input_type="number", help_text="Dezimalgrad, z. B. 48.2082"),
-                _field("Längengrad", "eos-setup-longitude", _display_value(state, "longitude", "16.3738"), input_type="number", help_text="Dezimalgrad, z. B. 16.3738"),
+                _field("Breitengrad", "eos-setup-latitude", _display_value(state, "latitude", "47.4374107833627"), input_type="number", help_text="Dezimalgrad"),
+                _field("Längengrad", "eos-setup-longitude", _display_value(state, "longitude", "15.003592944474134"), input_type="number", help_text="Dezimalgrad"),
                 cls="grid grid-cols-1 md:grid-cols-2 gap-4",
             ),
             cls="border rounded-lg p-4 mb-4",
@@ -233,30 +239,37 @@ def QuickSetup() -> Div:
             _field(
                 "IP-Adresse oder Hostname",
                 "eos-setup-cerbo",
-                _display_value(state, "cerbo_host", "192.168.1.50"),
-                help_text="Am Cerbo Modbus TCP aktivieren; Standard: Port 502, Unit ID 100, möglichst Read-only.",
+                _display_value(state, "cerbo_host", "192.168.178.150"),
+                help_text="Modbus TCP: Port 502, Unit ID 100, möglichst Read-only.",
             ),
+            P("System: 48 V · 3 × MultiPlus-II 10000 · PV vollständig DC-gekoppelt über SmartSolar MPPT.", cls="text-sm opacity-80"),
             cls="border rounded-lg p-4 mb-4",
         ),
         Div(
-            H2("3. PV-Anlage – erste Dachfläche", cls="text-lg font-semibold mb-2"),
-            P(
-                "Für Ost/West oder mehrere Wechselrichter zunächst die wichtigste Fläche eintragen; weitere Flächen können danach unter Config ergänzt werden.",
-                cls="text-sm mb-3",
+            H2("3. PV-Anlage", cls="text-lg font-semibold mb-2"),
+            P(f"Anlagenprofil: {VICTRON_48V_PROFILE_NAME}", cls="font-semibold mb-2"),
+            Div(
+                _field("Dachneigung [°]", "eos-setup-tilt", _display_value(state, "tilt", "25"), input_type="number"),
+                _field("Süd-Azimut [°]", "eos-setup-south-azimuth", _display_value(state, "south_azimuth", "180"), input_type="number", help_text="180° = Süd"),
+                _field("Nord-Azimut [°]", "eos-setup-north-azimuth", _display_value(state, "north_azimuth", "0"), input_type="number", help_text="0° = Nord"),
+                cls="grid grid-cols-1 md:grid-cols-3 gap-4",
             ),
             Div(
-                _field("Modulneigung [°]", "eos-setup-tilt", _display_value(state, "tilt", "30"), input_type="number"),
-                _field("Azimut [°]", "eos-setup-azimuth", _display_value(state, "azimuth", "180"), input_type="number", help_text="0=Norden, 90=Osten, 180=Süden, 270=Westen"),
-                _field("Modulleistung [Wp]", "eos-setup-module-power", _display_value(state, "module_power", "400"), input_type="number", help_text="EOS wählt ein passendes CEC-Modell nach Leistung."),
-                _field("Module pro String", "eos-setup-modules-string", _display_value(state, "modules_per_string", "10"), input_type="number", step="1"),
-                _field("Strings pro Wechselrichter", "eos-setup-strings", _display_value(state, "strings_per_inverter", "2"), input_type="number", step="1"),
-                _field("Wechselrichterleistung [W]", "eos-setup-inverter-power", _display_value(state, "inverter_power", "8000"), input_type="number", help_text="EOS wählt ein passendes CEC-Wechselrichtermodell nach Leistung."),
-                cls="grid grid-cols-1 md:grid-cols-2 gap-4",
+                P("Süd 1 · MPPT 250/100 · 3 × 5 LONGi LR5-54HTH-435M · 6,525 kWp · MPPT-Profil 5,8 kW"),
+                P("Süd 2 · MPPT 250/100 · 3 × 5 LONGi LR5-54HTH-435M · 6,525 kWp · MPPT-Profil 5,8 kW"),
+                P("Süd 3 · MPPT 250/60  · 1 × 4 LONGi LR5-54HTH-435M · 1,740 kWp · MPPT-Profil 3,44 kW"),
+                P("Nord   · MPPT 250/100 · 5 × 5 Peimar OS280P · 7,000 kWp · MPPT-Profil 5,8 kW"),
+                P("Gesamt: 59 Module · 21,790 kWp", cls="font-semibold mt-2"),
+                cls="border rounded p-3 text-sm space-y-1",
+            ),
+            P(
+                "Für PVLib wird je MPPT-Gruppe ein passendes Leistungsmodell verwendet. So werden Süd/Nord und die unterschiedlichen Reglergrenzen getrennt berücksichtigt.",
+                cls="text-xs opacity-70 mt-2",
             ),
             cls="border rounded-lg p-4 mb-4",
         ),
         Button(
-            "Einrichtung dauerhaft speichern",
+            "Anlagenprofil dauerhaft speichern",
             id="eos-setup-save",
             type="button",
             onclick="eosRunQuickSetup()",
