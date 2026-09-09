@@ -1,10 +1,13 @@
 from typing import Any
 
+import requests
 from fasthtml.common import A, Button, Div, H2, Input, Label, P, Script
 
 from akkudoktoreos.config.configabc import runtime_environment
+from akkudoktoreos.core.coreabc import get_config
 from akkudoktoreos.core.version import __version__
 from akkudoktoreos.server.dash.markdown import Markdown
+from akkudoktoreos.server.dash.quicksetup import quick_setup_state
 
 about_md = f"""![Logo](/eosdash/assets/logo.png)
 
@@ -39,9 +42,9 @@ async function eosSetupUpdate(key, value) {
         headers: {"Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"},
         body: body
     });
-    if (!response.ok) {
-        const text = await response.text();
-        throw new Error(key + ": " + response.status + " " + text.slice(0, 500));
+    const text = await response.text();
+    if (!response.ok || text.includes("Can not set " + key + " on ")) {
+        throw new Error(key + " konnte nicht übernommen werden. " + text.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").slice(0, 700));
     }
 }
 
@@ -129,18 +132,21 @@ async function eosRunQuickSetup() {
             await eosSetupUpdate(key, value);
         }
 
+        status.textContent = "Schreibe Konfiguration dauerhaft auf die NAS …";
         const saveResponse = await fetch("/eosdash/admin", {
             method: "POST",
             headers: {"Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"},
             body: new URLSearchParams({category: "configuration", action: "save_to_file"})
         });
-        if (!saveResponse.ok) {
-            throw new Error("Die Einstellungen wurden gesetzt, konnten aber nicht sofort in die Konfigurationsdatei geschrieben werden.");
+        const saveText = await saveResponse.text();
+        if (!saveResponse.ok || saveText.includes("Can not save actual config") || !saveText.includes("Saved configuration to")) {
+            throw new Error("Die Werte wurden an EOS übertragen, aber das dauerhafte Schreiben nach /data/config/EOS.config.json konnte nicht bestätigt werden.");
         }
 
-        status.textContent = "✓ Einrichtung gespeichert. EOS läuft jetzt im Prediction-Modus mit Open-Meteo, PVLib und Cerbo-GX-Istwertkorrektur.";
+        status.textContent = "✓ Dauerhaft gespeichert. Die Seite wird neu geladen und liest die Werte aus EOS zurück …";
         status.className = "mt-3 text-sm text-green-700 font-semibold";
         document.getElementById("eos-setup-next").style.display = "inline-block";
+        setTimeout(() => window.location.reload(), 1200);
     } catch (error) {
         status.textContent = "Fehler: " + error.message;
         status.className = "mt-3 text-sm text-red-700 font-semibold";
@@ -177,20 +183,47 @@ def _field(
     )
 
 
+def _current_quick_setup_state() -> dict[str, Any]:
+    """Read the effective settings from the running EOS server for display."""
+    config_eos = get_config()
+    host = str(config_eos.server.host or "127.0.0.1")
+    if host in {"0.0.0.0", "::"}:
+        host = "127.0.0.1"
+    port = int(config_eos.server.port or 8503)
+
+    try:
+        response = requests.get(f"http://{host}:{port}/v1/config", timeout=5)
+        response.raise_for_status()
+        return quick_setup_state(response.json())
+    except Exception:
+        return {}
+
+
+def _display_value(state: dict[str, Any], key: str, default: str) -> str:
+    value = state.get(key)
+    return default if value is None or value == "" else str(value)
+
+
 def QuickSetup() -> Div:
     """Simple first-run setup for the Synology + Victron use case."""
+    state = _current_quick_setup_state()
+    configured = bool(state.get("configured"))
+
     return Div(
         H2("Schnelleinrichtung: Synology + Victron Cerbo GX", cls="text-2xl font-bold mb-2"),
         P(
-            "Für eine typische Anlage genügt diese Seite. Die Werte werden dauerhaft in EOS gespeichert; "
-            "eine synology.env-Datei ist dafür nicht mehr nötig.",
-            cls="mb-4",
+            "Die Felder zeigen die aktuell in EOS gespeicherten Werte. Nach dem Speichern wird die Seite automatisch neu geladen, damit du sofort siehst, was tatsächlich dauerhaft übernommen wurde.",
+            cls="mb-2",
+        ),
+        P(
+            "✓ Gespeicherte Cerbo-Konfiguration erkannt." if configured else "Noch keine Cerbo-Konfiguration gespeichert.",
+            cls="text-sm mb-4 text-green-700 font-semibold" if configured else "text-sm mb-4 opacity-70",
         ),
         Div(
             H2("1. Standort", cls="text-lg font-semibold mb-2"),
             Div(
-                _field("Breitengrad", "eos-setup-latitude", "48.2082", input_type="number", help_text="Dezimalgrad, z. B. 48.2082"),
-                _field("Längengrad", "eos-setup-longitude", "16.3738", input_type="number", help_text="Dezimalgrad, z. B. 16.3738"),
+                _field("Breitengrad", "eos-setup-latitude", _display_value(state, "latitude", "48.2082"), input_type="number", help_text="Dezimalgrad, z. B. 48.2082"),
+                _field("Längengrad", "eos-setup-longitude", _display_value(state, "longitude", "16.3738"), input_type="number", help_text="Dezimalgrad, z. B. 16.3738"),
                 cls="grid grid-cols-1 md:grid-cols-2 gap-4",
             ),
             cls="border rounded-lg p-4 mb-4",
@@ -200,7 +233,7 @@ def QuickSetup() -> Div:
             _field(
                 "IP-Adresse oder Hostname",
                 "eos-setup-cerbo",
-                "192.168.1.50",
+                _display_value(state, "cerbo_host", "192.168.1.50"),
                 help_text="Am Cerbo Modbus TCP aktivieren; Standard: Port 502, Unit ID 100, möglichst Read-only.",
             ),
             cls="border rounded-lg p-4 mb-4",
@@ -212,18 +245,18 @@ def QuickSetup() -> Div:
                 cls="text-sm mb-3",
             ),
             Div(
-                _field("Modulneigung [°]", "eos-setup-tilt", "30", input_type="number"),
-                _field("Azimut [°]", "eos-setup-azimuth", "180", input_type="number", help_text="0=Norden, 90=Osten, 180=Süden, 270=Westen"),
-                _field("Modulleistung [Wp]", "eos-setup-module-power", "400", input_type="number", help_text="EOS wählt ein passendes CEC-Modell nach Leistung."),
-                _field("Module pro String", "eos-setup-modules-string", "10", input_type="number", step="1"),
-                _field("Strings pro Wechselrichter", "eos-setup-strings", "2", input_type="number", step="1"),
-                _field("Wechselrichterleistung [W]", "eos-setup-inverter-power", "8000", input_type="number", help_text="EOS wählt ein passendes CEC-Wechselrichtermodell nach Leistung."),
+                _field("Modulneigung [°]", "eos-setup-tilt", _display_value(state, "tilt", "30"), input_type="number"),
+                _field("Azimut [°]", "eos-setup-azimuth", _display_value(state, "azimuth", "180"), input_type="number", help_text="0=Norden, 90=Osten, 180=Süden, 270=Westen"),
+                _field("Modulleistung [Wp]", "eos-setup-module-power", _display_value(state, "module_power", "400"), input_type="number", help_text="EOS wählt ein passendes CEC-Modell nach Leistung."),
+                _field("Module pro String", "eos-setup-modules-string", _display_value(state, "modules_per_string", "10"), input_type="number", step="1"),
+                _field("Strings pro Wechselrichter", "eos-setup-strings", _display_value(state, "strings_per_inverter", "2"), input_type="number", step="1"),
+                _field("Wechselrichterleistung [W]", "eos-setup-inverter-power", _display_value(state, "inverter_power", "8000"), input_type="number", help_text="EOS wählt ein passendes CEC-Wechselrichtermodell nach Leistung."),
                 cls="grid grid-cols-1 md:grid-cols-2 gap-4",
             ),
             cls="border rounded-lg p-4 mb-4",
         ),
         Button(
-            "Einrichtung speichern",
+            "Einrichtung dauerhaft speichern",
             id="eos-setup-save",
             type="button",
             onclick="eosRunQuickSetup()",
@@ -233,7 +266,7 @@ def QuickSetup() -> Div:
             "Prognose öffnen",
             href="/eosdash/prediction",
             id="eos-setup-next",
-            style="display:none",
+            style="display:inline-block" if configured else "display:none",
             cls="ml-3 px-5 py-3 rounded border inline-block",
         ),
         P("", id="eos-setup-status", cls="mt-3 text-sm"),
