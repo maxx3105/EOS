@@ -3,6 +3,7 @@
 import numpy as np
 import pandas as pd
 
+from akkudoktoreos.measurement.measurement import MeasurementCommonSettings
 from akkudoktoreos.prediction.loadvictronhistory import (
     LoadVictronHistory,
     LoadVictronHistoryCommonSettings,
@@ -77,6 +78,12 @@ def test_seasonal_temperature_defaults_are_enabled_for_victron_history():
     assert settings.temperature_weighting is True
     assert settings.temperature_half_life_c == 4.0
     assert settings.temperature_history_key == "victron_outdoor_temp_c"
+
+
+def test_measurement_accepts_local_outdoor_temperature_history():
+    settings = MeasurementCommonSettings()
+
+    assert "victron_outdoor_temp_c" in settings.keys
 
 
 def test_legacy_default_history_window_is_migrated_to_seasonal_profile():
