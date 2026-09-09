@@ -117,7 +117,7 @@ def patch_loguru_record(
 
     The function is intended for forwarding log messages originating from
     subprocess stdout/stderr streams into Loguru while retaining meaningful
-    source information (e.g., file path and line number).
+    source information (e.g., file path, line number).
 
     Args:
         record:
@@ -318,8 +318,12 @@ async def supervise_eosdash() -> None:
     else:
         logger.debug(f"EOSdash subprocess monitored - startup_eosdash set: '{startup_eosdash}'")
 
-    host = config_eos.server.eosdash_host
-    port = config_eos.server.eosdash_port
+    # Explicit container environment overrides must win over persisted config.
+    # This is important for Docker/Synology where an existing EOS.config.json may
+    # still contain the loopback default 127.0.0.1 from the first startup.
+    host = os.getenv("EOS_SERVER__EOSDASH_HOST") or config_eos.server.eosdash_host
+    port_env = os.getenv("EOS_SERVER__EOSDASH_PORT")
+    port = int(port_env) if port_env else config_eos.server.eosdash_port
     eos_host = config_eos.server.host
     eos_port = config_eos.server.port
 
