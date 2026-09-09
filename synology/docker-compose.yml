@@ -62,8 +62,8 @@ services:
     restart: unless-stopped
 
     ports:
-      - "8503:8503"
-      - "8504:8504"
+      - "18503:8503"
+      - "18504:8504"
 
     volumes:
       - ./synology-data:/data:rw
