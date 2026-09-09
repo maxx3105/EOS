@@ -38,7 +38,16 @@ class PVForecastPVLibVictron(PVForecastPVLib):
         similarly sized CEC grid inverter. That is a poor match for short strings on a
         SmartSolar charge controller because an arbitrary CEC inverter may have a much
         higher MPPT voltage window. For the Victron provider, a numeric value therefore
-        means *maximum MPPT output power* and is represented by a PVWatts output stage.
+        means *maximum MPPT output power*.
+
+        The output stage is expressed with the Sandia inverter parameter shape, but with
+        all voltage-dependent coefficients set to zero. This deliberately makes voltage
+        irrelevant and reduces the model to a constant-efficiency power conversion stage
+        with a hard ``Paco`` output cap. Using the Sandia shape also keeps PVLib's AC
+        result as a one-dimensional power series when the module side uses a CEC
+        single-diode model. A PVWatts inverter parameter set would make PVLib apply the
+        inverter function to the complete CEC DC dataframe (voltage/current columns too),
+        which is not the desired DC-coupled SmartSolar behaviour.
 
         Named inverter models keep the original behaviour, which preserves compatibility
         with installations that intentionally use an AC-coupled inverter model.
@@ -51,13 +60,21 @@ class PVForecastPVLibVictron(PVForecastPVLib):
 
             if mppt_output_power_w > 0:
                 efficiency = self._mppt_output_efficiency
-                # pvlib.inverter.pvwatts clips AC output at eta_inv_nom * pdc0.
-                # Set pdc0 accordingly so the resulting usable PV power is capped at
-                # the configured 48-V SmartSolar nominal PV power.
                 model = pd.Series(
                     {
-                        "pdc0": mppt_output_power_w / efficiency,
-                        "eta_inv_nom": efficiency,
+                        # With Pso/C0..C3 = 0 the Sandia equation becomes
+                        # Pac = Paco / Pdco * Pdc = efficiency * Pdc, clipped at Paco.
+                        "Paco": mppt_output_power_w,
+                        "Pdco": mppt_output_power_w / efficiency,
+                        # Vdco is required by the Sandia parameter schema. Voltage does
+                        # not affect the result because all voltage coefficients are zero.
+                        "Vdco": 100.0,
+                        "Pso": 0.0,
+                        "C0": 0.0,
+                        "C1": 0.0,
+                        "C2": 0.0,
+                        "C3": 0.0,
+                        "Pnt": 0.0,
                     },
                     name=f"Victron_MPPT_{mppt_output_power_w:.0f}W",
                 )
