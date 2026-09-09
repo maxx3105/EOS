@@ -96,6 +96,42 @@ class PVForecastPVLibVictron(PVForecastPVLib):
         aligned_minute = (timestamp.minute // interval) * interval
         return timestamp.set(minute=aligned_minute, second=0, microsecond=0)
 
+    @classmethod
+    def _raw_meter_window_is_complete(
+        cls,
+        series: pd.Series,
+        correction_start: DateTime,
+        correction_end: DateTime,
+    ) -> bool:
+        """Return whether real meter samples cover a correction window without restart gaps.
+
+        ``key_to_array(..., fill_method='time')`` can otherwise synthesize a complete-looking
+        15-minute array from only a few samples collected after an EOS/container restart. That
+        makes the measured 60-minute energy appear close to zero and incorrectly drives the live
+        correction to its minimum factor. Require actual meter coverage near both window edges,
+        no raw gap larger than one forecast interval and a monotonically increasing cumulative
+        counter before resampling is allowed.
+        """
+        if series.empty:
+            return False
+
+        index = pd.DatetimeIndex(series.index).sort_values()
+        start_ts = pd.Timestamp(correction_start)
+        end_ts = pd.Timestamp(correction_end)
+        tolerance = pd.Timedelta(minutes=cls._measurement_correction_interval_minutes)
+
+        if index[0] > start_ts + tolerance or index[-1] < end_ts:
+            return False
+        if len(index) > 1 and np.any(np.diff(index.asi8) > tolerance.value):
+            return False
+
+        values = pd.to_numeric(series.reindex(index), errors="coerce").to_numpy(dtype=float)
+        if np.isnan(values).any():
+            return False
+        if len(values) > 1 and np.any(np.diff(values) < -1e-6):
+            return False
+        return True
+
     async def _apply_measurement_correction(self, df_pvforecast: pd.DataFrame) -> pd.DataFrame:
         """Correct near-term PV forecast using the latest completed Victron 15-minute slot."""
         pv_meter_keys = self.config.measurement.pv_production_emr_keys
@@ -113,6 +149,7 @@ class PVForecastPVLibVictron(PVForecastPVLib):
         )
 
         latest_meter_datetimes: list[DateTime] = []
+        recent_meter_series: dict[str, pd.Series] = {}
         for key in pv_meter_keys:
             series = await measurement.key_to_raw_series(
                 key=key,
@@ -123,6 +160,7 @@ class PVForecastPVLibVictron(PVForecastPVLib):
             if series.empty:
                 logger.debug(f"Victron PV correction skipped: no recent data for '{key}'")
                 return df_pvforecast
+            recent_meter_series[key] = series.sort_index()
             latest_meter_datetimes.append(
                 to_datetime(series.index[-1], in_timezone=self.config.general.timezone)
             )
@@ -149,6 +187,18 @@ class PVForecastPVLibVictron(PVForecastPVLib):
 
         measured_energy_kwh = 0.0
         for key in pv_meter_keys:
+            raw_series = recent_meter_series[key]
+            if not self._raw_meter_window_is_complete(
+                raw_series,
+                correction_start,
+                correction_end,
+            ):
+                logger.info(
+                    "Victron PV correction skipped: waiting for a complete continuous "
+                    f"{self._measurement_correction_window_minutes}-minute meter window for '{key}'"
+                )
+                return df_pvforecast
+
             meter_values = await measurement.key_to_array(
                 key=key,
                 start_datetime=correction_start,
