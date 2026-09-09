@@ -21,10 +21,43 @@ class PVForecastPVLibVictron(PVForecastPVLib):
     # the live Victron feedback then corrects remaining installation-specific bias.
     _mppt_output_efficiency = 0.985
 
+    # Site-specific named AC-coupled microinverter model. The name intentionally cannot
+    # be parsed as a number so it is kept distinct from the SmartSolar numeric convention.
+    _hoymiles_inverter_model = "Hoymiles_HMS_800W_2T_AC_OUT"
+    _hoymiles_ac_limit_w = 800.0
+    # Hoymiles specifies 96.7 % peak efficiency for the European HMS-800-2T.
+    _hoymiles_ac_efficiency = 0.967
+
     @classmethod
     def provider_id(cls) -> str:
         """Return the unique provider identifier."""
         return "PVForecastPVLibVictron"
+
+    @staticmethod
+    def _constant_efficiency_sandia_model(
+        output_limit_w: float, efficiency: float, *, name: str
+    ) -> pd.Series:
+        """Return a voltage-independent Sandia-shaped output stage.
+
+        With Pso/C0..C3 = 0, the Sandia equation reduces to a constant conversion
+        efficiency with a hard Paco output cap. This works for both DC-coupled SmartSolar
+        stages and simple AC microinverter approximations while keeping PVLib's AC result
+        one-dimensional for CEC module models.
+        """
+        return pd.Series(
+            {
+                "Paco": output_limit_w,
+                "Pdco": output_limit_w / efficiency,
+                "Vdco": 100.0,
+                "Pso": 0.0,
+                "C0": 0.0,
+                "C1": 0.0,
+                "C2": 0.0,
+                "C3": 0.0,
+                "Pnt": 0.0,
+            },
+            name=name,
+        )
 
     def _get_model(
         self,
@@ -32,27 +65,27 @@ class PVForecastPVLibVictron(PVForecastPVLib):
         database: pd.DataFrame,
         device_type: DeviceType,
     ) -> Optional[pd.Series]:
-        """Treat numeric inverter powers as DC-coupled Victron MPPT output stages.
+        """Resolve Victron DC stages and the site's Hoymiles AC-out inverter model.
 
-        The base PVLib provider interprets a numeric ``inverter_model`` by selecting a
-        similarly sized CEC grid inverter. That is a poor match for short strings on a
-        SmartSolar charge controller because an arbitrary CEC inverter may have a much
-        higher MPPT voltage window. For the Victron provider, a numeric value therefore
-        means *maximum MPPT output power*.
-
-        The output stage is expressed with the Sandia inverter parameter shape, but with
-        all voltage-dependent coefficients set to zero. This deliberately makes voltage
-        irrelevant and reduces the model to a constant-efficiency power conversion stage
-        with a hard ``Paco`` output cap. Using the Sandia shape also keeps PVLib's AC
-        result as a one-dimensional power series when the module side uses a CEC
-        single-diode model. A PVWatts inverter parameter set would make PVLib apply the
-        inverter function to the complete CEC DC dataframe (voltage/current columns too),
-        which is not the desired DC-coupled SmartSolar behaviour.
-
-        Named inverter models keep the original behaviour, which preserves compatibility
-        with installations that intentionally use an AC-coupled inverter model.
+        Numeric inverter powers are interpreted as DC-coupled Victron SmartSolar output
+        limits. The explicitly named Hoymiles model represents the HMS-800W-2T on AC-out
+        with its own 800 W AC cap. Other named inverter models retain the base PVLib/CEC
+        behaviour.
         """
         if device_type == "inverter":
+            if isinstance(model_spec, str) and model_spec == self._hoymiles_inverter_model:
+                model = self._constant_efficiency_sandia_model(
+                    self._hoymiles_ac_limit_w,
+                    self._hoymiles_ac_efficiency,
+                    name=self._hoymiles_inverter_model,
+                )
+                logger.info(
+                    "Using Hoymiles AC-out microinverter model: "
+                    f"limit={self._hoymiles_ac_limit_w:.0f} W, "
+                    f"efficiency={self._hoymiles_ac_efficiency:.3f}"
+                )
+                return model
+
             try:
                 mppt_output_power_w = float(model_spec)
             except (TypeError, ValueError):
@@ -60,22 +93,9 @@ class PVForecastPVLibVictron(PVForecastPVLib):
 
             if mppt_output_power_w > 0:
                 efficiency = self._mppt_output_efficiency
-                model = pd.Series(
-                    {
-                        # With Pso/C0..C3 = 0 the Sandia equation becomes
-                        # Pac = Paco / Pdco * Pdc = efficiency * Pdc, clipped at Paco.
-                        "Paco": mppt_output_power_w,
-                        "Pdco": mppt_output_power_w / efficiency,
-                        # Vdco is required by the Sandia parameter schema. Voltage does
-                        # not affect the result because all voltage coefficients are zero.
-                        "Vdco": 100.0,
-                        "Pso": 0.0,
-                        "C0": 0.0,
-                        "C1": 0.0,
-                        "C2": 0.0,
-                        "C3": 0.0,
-                        "Pnt": 0.0,
-                    },
+                model = self._constant_efficiency_sandia_model(
+                    mppt_output_power_w,
+                    efficiency,
                     name=f"Victron_MPPT_{mppt_output_power_w:.0f}W",
                 )
                 logger.info(
