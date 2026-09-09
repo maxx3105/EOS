@@ -30,6 +30,7 @@ from akkudoktoreos.prediction.loadakkudoktor import (
     LoadAkkudoktorAdjusted,
 )
 from akkudoktoreos.prediction.loadimport import LoadImport
+from akkudoktoreos.prediction.loadvictronhistory import LoadVictronHistory
 from akkudoktoreos.prediction.loadvrm import LoadVrm
 from akkudoktoreos.prediction.predictionabc import PredictionContainer
 from akkudoktoreos.prediction.pvforecastakkudoktor import PVForecastAkkudoktor
@@ -83,6 +84,7 @@ feedintariff_smard = FeedInTariffSMARD()
 feedintariff_tibber = FeedInTariffTibber()
 loadforecast_akkudoktor = LoadAkkudoktor()
 loadforecast_akkudoktor_adjusted = LoadAkkudoktorAdjusted()
+loadforecast_victron_history = LoadVictronHistory()
 loadforecast_vrm = LoadVrm()
 loadforecast_import = LoadImport()
 pvforecast_akkudoktor = PVForecastAkkudoktor()
@@ -120,6 +122,7 @@ def prediction_providers() -> list[
         LoadAkkudoktor,
         LoadAkkudoktorAdjusted,
         LoadImport,
+        LoadVictronHistory,
         LoadVrm,
         PVForecastAkkudoktor,
         PVForecastForecastSolar,
@@ -157,6 +160,7 @@ def prediction_providers() -> list[
         feedintariff_tibber, \
         loadforecast_akkudoktor, \
         loadforecast_akkudoktor_adjusted, \
+        loadforecast_victron_history, \
         loadforecast_vrm, \
         loadforecast_import, \
         pvforecast_akkudoktor, \
@@ -197,6 +201,7 @@ def prediction_providers() -> list[
         feedintariff_tibber,
         loadforecast_akkudoktor,
         loadforecast_akkudoktor_adjusted,
+        loadforecast_victron_history,
         loadforecast_import,
         loadforecast_vrm,
         pvforecast_akkudoktor,
@@ -234,6 +239,7 @@ class Prediction(PredictionContainer):
             LoadAkkudoktor,
             LoadAkkudoktorAdjusted,
             LoadImport,
+            LoadVictronHistory,
             LoadVrm,
             PVForecastAkkudoktor,
             PVForecastForecastSolar,
