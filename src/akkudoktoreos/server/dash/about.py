@@ -14,6 +14,12 @@ from akkudoktoreos.server.dash.quicksetup import (
     EVCS_PROFILE_NAME,
     EVCS_UNIT_IDS,
     EV_TARGET_SOC_PERCENT,
+    HOYMILES_AC_LIMIT_W,
+    HOYMILES_AZIMUTH_DEG,
+    HOYMILES_EFFICIENCY,
+    HOYMILES_PEAKPOWER_KW,
+    HOYMILES_PROFILE_NAME,
+    HOYMILES_TILT_DEG,
     PYLONTECH_CAPACITY_WH,
     PYLONTECH_PROFILE_NAME,
     PYLONTECH_USABLE_95_DOD_WH,
@@ -87,12 +93,29 @@ function eosVictronPlane(tilt, azimuth, modulePower, modulesPerString, strings, 
     };
 }
 
-function eosBuildVictron48VPlanes(tilt, southAzimuth, northAzimuth) {
+function eosHoymilesPlane(eastTilt, eastAzimuth) {
+    return {
+        surface_tilt: eastTilt,
+        surface_azimuth: eastAzimuth,
+        peakpower: 0.870,
+        mountingplace: "building",
+        loss: 0.0,
+        trackingtype: 0,
+        albedo: 0.2,
+        module_model: "435.0",
+        inverter_model: "Hoymiles_HMS_800W_2T_AC_OUT",
+        modules_per_string: 1,
+        strings_per_inverter: 2
+    };
+}
+
+function eosBuildVictron48VPlanes(tilt, southAzimuth, northAzimuth, eastTilt, eastAzimuth) {
     return [
         eosVictronPlane(tilt, southAzimuth, 435, 5, 3, 5800),
         eosVictronPlane(tilt, southAzimuth, 435, 5, 3, 5800),
         eosVictronPlane(tilt, southAzimuth, 435, 4, 1, 3440),
-        eosVictronPlane(tilt, northAzimuth, 280, 5, 5, 5800)
+        eosVictronPlane(tilt, northAzimuth, 280, 5, 5, 5800),
+        eosHoymilesPlane(eastTilt, eastAzimuth)
     ];
 }
 
@@ -158,9 +181,13 @@ async function eosRunQuickSetup() {
         const tilt = eosSetupNumber("eos-setup-tilt", "Modulneigung");
         const southAzimuth = eosSetupNumber("eos-setup-south-azimuth", "Süd-Azimut");
         const northAzimuth = eosSetupNumber("eos-setup-north-azimuth", "Nord-Azimut");
+        const eastTilt = eosSetupNumber("eos-setup-east-tilt", "Hoymiles-Modulneigung");
+        const eastAzimuth = eosSetupNumber("eos-setup-east-azimuth", "Hoymiles-Ost-Azimut");
         if (tilt < 0 || tilt > 90) throw new Error("Modulneigung muss zwischen 0 und 90° liegen.");
+        if (eastTilt < 0 || eastTilt > 90) throw new Error("Hoymiles-Modulneigung muss zwischen 0 und 90° liegen.");
         if (southAzimuth < 0 || southAzimuth > 360) throw new Error("Süd-Azimut muss zwischen 0 und 360° liegen.");
         if (northAzimuth < 0 || northAzimuth > 360) throw new Error("Nord-Azimut muss zwischen 0 und 360° liegen.");
+        if (eastAzimuth < 0 || eastAzimuth > 360) throw new Error("Hoymiles-Ost-Azimut muss zwischen 0 und 360° liegen.");
 
         const minSoc = eosSetupNumber("eos-setup-min-soc", "Mindest-SOC / Inselreserve");
         if (!Number.isInteger(minSoc) || minSoc < 0 || minSoc > 100) {
@@ -172,7 +199,7 @@ async function eosRunQuickSetup() {
             throw new Error("EV-Ziel-SOC muss eine ganze Zahl zwischen 0 und 100 % sein.");
         }
 
-        const planes = eosBuildVictron48VPlanes(tilt, southAzimuth, northAzimuth);
+        const planes = eosBuildVictron48VPlanes(tilt, southAzimuth, northAzimuth, eastTilt, eastAzimuth);
         const battery = eosBuildPylontechBattery(minSoc);
         const inverters = eosBuildMultiplusInverters();
         const electricVehicles = eosBuildElectricVehicles(evTargetSoc);
@@ -193,7 +220,7 @@ async function eosRunQuickSetup() {
             ["adapter.victron.port", 502],
             ["adapter.victron.unit_id", 100],
             ["adapter.victron.timeout_sec", 3.0],
-            ["adapter.victron.include_ac_coupled_pv", false],
+            ["adapter.victron.include_ac_coupled_pv", true],
             ["adapter.victron.pv_energy_key", "victron_pv_emr"],
             ["adapter.victron.load_energy_key", "victron_load_emr"],
             ["adapter.victron.base_load_energy_key", "victron_base_load_emr"],
@@ -224,7 +251,7 @@ async function eosRunQuickSetup() {
             throw new Error("Die Werte wurden an EOS übertragen, aber das dauerhafte Schreiben nach /data/config/EOS.config.json konnte nicht bestätigt werden.");
         }
 
-        status.textContent = "✓ Dauerhaft gespeichert: PV + Batterie/Inselreserve + EVCS-Grundlasttrennung + EV-Überschussziel. Die Seite wird neu geladen …";
+        status.textContent = "✓ Dauerhaft gespeichert: 4× SmartSolar DC + Hoymiles AC-out + Batterie/Inselreserve + EVCS-Grundlasttrennung + EV-Überschussziel. Die Seite wird neu geladen …";
         status.className = "mt-3 text-sm text-green-700 font-semibold";
         document.getElementById("eos-setup-next").style.display = "inline-block";
         setTimeout(() => window.location.reload(), 1200);
@@ -286,6 +313,7 @@ def QuickSetup() -> Div:
     state = _current_quick_setup_state()
     configured = bool(state.get("configured"))
     profile_active = bool(state.get("profile_active"))
+    hoymiles_active = bool(state.get("hoymiles_active"))
     battery_profile_active = bool(state.get("battery_profile_active"))
     ev_profile_active = bool(state.get("ev_profile_active"))
     evcs_measurement_active = bool(state.get("evcs_measurement_active"))
@@ -295,7 +323,8 @@ def QuickSetup() -> Div:
         H2("Schnelleinrichtung: Synology + Victron Cerbo GX", cls="text-2xl font-bold mb-2"),
         P("PV, Batterie, MultiPlus und EVs werden als Anlagenprofil verwaltet.", cls="mb-2"),
         P("✓ Gespeicherte Cerbo-Konfiguration erkannt." if configured else "Noch keine Cerbo-Konfiguration gespeichert.", cls="text-sm mb-1 text-green-700 font-semibold" if configured else "text-sm mb-1 opacity-70"),
-        P("✓ 4-MPPT-Profil aktiv (21,79 kWp)." if profile_active else "Das 4-MPPT-Profil wird beim nächsten Speichern angewendet.", cls="text-sm mb-1 text-green-700 font-semibold" if profile_active else "text-sm mb-1 opacity-70"),
+        P("✓ PV-Profil aktiv: 4× SmartSolar DC + Hoymiles AC-out (22,66 kWp)." if profile_active else "Das erweiterte PV-Profil mit Hoymiles AC-out wird beim nächsten Speichern angewendet.", cls="text-sm mb-1 text-green-700 font-semibold" if profile_active else "text-sm mb-1 opacity-70"),
+        P("✓ Hoymiles AC-out wird in der Cerbo-PV-Istleistung berücksichtigt." if hoymiles_active else "Hoymiles AC-out wird beim nächsten Speichern in die PV-Istleistung aufgenommen.", cls="text-sm mb-1 text-green-700 font-semibold" if hoymiles_active else "text-sm mb-1 opacity-70"),
         P("✓ Pylontech-/MultiPlus-Profil aktiv (39,552 kWh)." if battery_profile_active else "Das Batterie-/MultiPlus-Profil wird beim nächsten Speichern angewendet.", cls="text-sm mb-1 text-green-700 font-semibold" if battery_profile_active else "text-sm mb-1 opacity-70"),
         P(f"✓ EV-Profil aktiv: PV-Überschuss bis {ev_target_soc} %, ohne feste Abfahrtszeit." if ev_profile_active else "Das EV-Profil wird beim nächsten Speichern angewendet.", cls="text-sm mb-1 text-green-700 font-semibold" if ev_profile_active else "text-sm mb-1 opacity-70"),
         P(
@@ -316,26 +345,33 @@ def QuickSetup() -> Div:
         Div(
             H2("2. Cerbo GX", cls="text-lg font-semibold mb-2"),
             _field("IP-Adresse oder Hostname", "eos-setup-cerbo", _display_value(state, "cerbo_host", "192.168.178.150"), help_text="Modbus TCP: Port 502, System Unit ID 100, weiterhin read-only."),
-            P("System: 48 V · 3 × MultiPlus-II 48/10000/140-100 · PV vollständig DC-gekoppelt.", cls="text-sm opacity-80"),
+            P("System: 48 V · 3 × MultiPlus-II 48/10000/140-100 · 4× SmartSolar DC-gekoppelt · Hoymiles HMS-800W-2T AC-gekoppelt auf AC-out.", cls="text-sm opacity-80"),
             cls="border rounded-lg p-4 mb-4",
         ),
         Div(
             H2("3. PV-Anlage", cls="text-lg font-semibold mb-2"),
             P(f"Anlagenprofil: {VICTRON_48V_PROFILE_NAME}", cls="font-semibold mb-2"),
             Div(
-                _field("Dachneigung [°]", "eos-setup-tilt", _display_value(state, "tilt", "25"), input_type="number"),
+                _field("Dachneigung Süd/Nord [°]", "eos-setup-tilt", _display_value(state, "tilt", "25"), input_type="number"),
                 _field("Süd-Azimut [°]", "eos-setup-south-azimuth", _display_value(state, "south_azimuth", "180"), input_type="number", help_text="180° = Süd"),
                 _field("Nord-Azimut [°]", "eos-setup-north-azimuth", _display_value(state, "north_azimuth", "0"), input_type="number", help_text="0° = Nord"),
                 cls="grid grid-cols-1 md:grid-cols-3 gap-4",
+            ),
+            Div(
+                _field("Hoymiles-Neigung [°]", "eos-setup-east-tilt", _display_value(state, "east_tilt", str(HOYMILES_TILT_DEG)), input_type="number"),
+                _field("Hoymiles-Ost-Azimut [°]", "eos-setup-east-azimuth", _display_value(state, "east_azimuth", str(HOYMILES_AZIMUTH_DEG)), input_type="number", help_text="90° = Ost"),
+                cls="grid grid-cols-1 md:grid-cols-2 gap-4",
             ),
             Div(
                 P("Süd 1 · MPPT 250/100 · 3 × 5 LONGi 435 W · 6,525 kWp · 5,8 kW"),
                 P("Süd 2 · MPPT 250/100 · 3 × 5 LONGi 435 W · 6,525 kWp · 5,8 kW"),
                 P("Süd 3 · MPPT 250/60 · 1 × 4 LONGi 435 W · 1,740 kWp · 3,44 kW"),
                 P("Nord · MPPT 250/100 · 5 × 5 Peimar 280 W · 7,000 kWp · 5,8 kW"),
-                P("Gesamt: 59 Module · 21,790 kWp", cls="font-semibold mt-2"),
+                P(f"Ost · {HOYMILES_PROFILE_NAME} · {HOYMILES_PEAKPOWER_KW:.3f} kWp · {HOYMILES_AC_LIMIT_W / 1000:.1f} kW AC · η≈{HOYMILES_EFFICIENCY * 100:.1f} %"),
+                P("Gesamt: 61 Module · 22,660 kWp DC-Nennleistung", cls="font-semibold mt-2"),
                 cls="border rounded p-3 text-sm space-y-1",
             ),
+            P("Der Hoymiles hängt auf AC-out. Sein AC-Ertrag wird zusätzlich zur DC-PV-Leistung der SmartSolar-Regler aus dem Cerbo-Systemwert erfasst; EOS bleibt read-only.", cls="text-xs opacity-70 mt-2"),
             cls="border rounded-lg p-4 mb-4",
         ),
         Div(
