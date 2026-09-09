@@ -9,6 +9,7 @@ from akkudoktoreos.core.coreabc import get_prediction
 from akkudoktoreos.prediction.loadabc import LoadProvider
 from akkudoktoreos.prediction.loadakkudoktor import LoadAkkudoktorCommonSettings
 from akkudoktoreos.prediction.loadimport import LoadImportCommonSettings
+from akkudoktoreos.prediction.loadvictronhistory import LoadVictronHistoryCommonSettings
 from akkudoktoreos.prediction.loadvrm import LoadVrmCommonSettings
 
 
@@ -17,9 +18,14 @@ def load_providers() -> list[str]:
     try:
         prediction_eos = get_prediction()
     except Exception:
-        # Prediction may not be initialized
-        # Return at least provider used in example
-        return ["LoadAkkudoktor", "LoadVrm", "LoadImport"]
+        # Prediction may not be initialized yet during early settings validation.
+        return [
+            "LoadAkkudoktor",
+            "LoadAkkudoktorAdjusted",
+            "LoadVictronHistory",
+            "LoadVrm",
+            "LoadImport",
+        ]
 
     return [
         provider.provider_id()
@@ -35,7 +41,7 @@ class LoadCommonSettings(SettingsBaseModel):
         default=None,
         json_schema_extra={
             "description": "Load provider id of provider to be used.",
-            "examples": ["LoadAkkudoktor"],
+            "examples": ["LoadVictronHistory"],
         },
     )
 
@@ -47,6 +53,13 @@ class LoadCommonSettings(SettingsBaseModel):
     loadimport: LoadImportCommonSettings = Field(
         default_factory=LoadImportCommonSettings,
         json_schema_extra={"description": "LoadImport provider settings."},
+    )
+
+    victron_history: LoadVictronHistoryCommonSettings = Field(
+        default_factory=LoadVictronHistoryCommonSettings,
+        json_schema_extra={
+            "description": "Local Cerbo GX measurement-history load forecast settings."
+        },
     )
 
     vrm: LoadVrmCommonSettings = Field(
