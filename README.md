@@ -70,15 +70,15 @@ Open-Meteo/PVLib forecast and use measured Cerbo GX PV production to correct the
 forecast without requiring Home Assistant, Node-RED or MQTT. The `PVForecastPVLibVictron`
 provider aligns feedback to the latest completed 15-minute slot.
 
-The intended Synology installation is through **Container Manager → Registry**. Search for:
+For Synology, use the supplied `synology/docker-compose.yml` (or the identical
+`docker-compose.synology.yaml`). Container Manager builds the image directly from the public
+`main` branch of this fork, so no Docker Hub image, GitHub login, Actions setup, Git checkout or
+environment file is required. After the first build, finish the site, Cerbo GX and first PV-plane
+configuration in EOSdash at `http://NAS-IP:8504`.
 
-```text
-maxx3105/eos
-```
-
-Download the `latest` tag, launch the container, map ports `8503` and `8504`, map a persistent NAS
-folder to `/data`, then finish the site, Cerbo GX and first PV-plane configuration in EOSdash at
-`http://NAS-IP:8504`. No Git checkout, Compose file or environment file is required for end users.
+If Container Manager shows `pull access denied for maxx3105/eos`, an outdated Compose file is being
+used. The current Compose must contain a `build:` context pointing to
+`https://github.com/maxx3105/EOS.git#main`.
 
 See the step-by-step German guide: **[EOS + Victron Cerbo GX auf Synology DS920+](SYNOLOGY_VICTRON.md)**.
 
