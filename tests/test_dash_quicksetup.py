@@ -8,6 +8,11 @@ from akkudoktoreos.server.dash.quicksetup import (
     EVCS_MAX_POWER_W,
     EVCS_UNIT_IDS,
     EV_TARGET_SOC_PERCENT,
+    HOYMILES_AC_LIMIT_W,
+    HOYMILES_AZIMUTH_DEG,
+    HOYMILES_INVERTER_MODEL,
+    HOYMILES_PEAKPOWER_KW,
+    HOYMILES_TILT_DEG,
     PYLONTECH_CAPACITY_WH,
     RENAULT_MEGANE_CAPACITY_WH,
     RENAULT_R5_CAPACITY_WH,
@@ -34,7 +39,7 @@ def test_quick_setup_enables_read_only_victron_prediction_stack():
         '["adapter.provider", ["Victron"]]',
         '["adapter.victron.port", 502]',
         '["adapter.victron.unit_id", 100]',
-        '["adapter.victron.include_ac_coupled_pv", false]',
+        '["adapter.victron.include_ac_coupled_pv", true]',
         '["adapter.victron.evcs_unit_ids", [40, 41]]',
         '["measurement.load_emr_keys", ["victron_base_load_emr"]]',
         '["prediction.hours", 48]',
@@ -47,10 +52,16 @@ def test_quick_setup_enables_read_only_victron_prediction_stack():
 
 
 def test_victron_48v_profile_matches_installed_pv_groups():
-    planes = build_victron_48v_planes(tilt=25, south_azimuth=180, north_azimuth=0)
+    planes = build_victron_48v_planes(
+        tilt=25,
+        south_azimuth=180,
+        north_azimuth=0,
+        east_tilt=70,
+        east_azimuth=90,
+    )
 
-    assert len(planes) == 4
-    assert sum(plane["peakpower"] for plane in planes) == pytest.approx(21.79)
+    assert len(planes) == 5
+    assert sum(plane["peakpower"] for plane in planes) == pytest.approx(22.66)
 
     for plane in planes[:2]:
         assert plane["surface_tilt"] == 25
@@ -73,6 +84,16 @@ def test_victron_48v_profile_matches_installed_pv_groups():
     assert planes[3]["strings_per_inverter"] == 5
     assert planes[3]["inverter_model"] == "5800"
     assert planes[3]["peakpower"] == pytest.approx(7.0)
+
+    hoymiles = planes[4]
+    assert hoymiles["surface_tilt"] == HOYMILES_TILT_DEG == 70.0
+    assert hoymiles["surface_azimuth"] == HOYMILES_AZIMUTH_DEG == 90.0
+    assert hoymiles["module_model"] == "435.0"
+    assert hoymiles["modules_per_string"] == 1
+    assert hoymiles["strings_per_inverter"] == 2
+    assert hoymiles["inverter_model"] == HOYMILES_INVERTER_MODEL
+    assert hoymiles["peakpower"] == pytest.approx(HOYMILES_PEAKPOWER_KW == 0.870)
+    assert HOYMILES_AC_LIMIT_W == 800
 
 
 def test_pylontech_profile_and_multiplus_limits():
@@ -133,6 +154,8 @@ def test_quick_setup_builds_valid_rest_paths():
         "tilt": 25,
         "south_azimuth": 180,
         "north_azimuth": 0,
+        "east_tilt": 70,
+        "east_azimuth": 90,
         "min_soc": 10,
         "ev_target_soc": 80,
     }
@@ -148,10 +171,11 @@ def test_quick_setup_builds_valid_rest_paths():
     assert updates["adapter/victron/evcs_unit_ids"] == [40, 41]
     assert updates["adapter/victron/evcs_energy_key_prefix"] == "victron_evcs"
     assert updates["adapter/victron/host"] == "192.168.178.150"
-    assert updates["adapter/victron/include_ac_coupled_pv"] is False
+    assert updates["adapter/victron/include_ac_coupled_pv"] is True
     assert updates["ems/mode"] == "PREDICTION"
-    assert len(updates["pvforecast/planes"]) == 4
-    assert sum(plane["peakpower"] for plane in updates["pvforecast/planes"]) == pytest.approx(21.79)
+    assert len(updates["pvforecast/planes"]) == 5
+    assert sum(plane["peakpower"] for plane in updates["pvforecast/planes"]) == pytest.approx(22.66)
+    assert updates["pvforecast/planes"][4]["inverter_model"] == HOYMILES_INVERTER_MODEL
     assert updates["devices/max_batteries"] == 1
     assert updates["devices/batteries"][0]["capacity_wh"] == 39552
     assert updates["devices/batteries"][0]["min_soc_percentage"] == 10
@@ -165,7 +189,13 @@ def test_quick_setup_builds_valid_rest_paths():
 
 
 def test_quick_setup_reads_saved_profile_back():
-    planes = build_victron_48v_planes(tilt=25, south_azimuth=180, north_azimuth=0)
+    planes = build_victron_48v_planes(
+        tilt=25,
+        south_azimuth=180,
+        north_azimuth=0,
+        east_tilt=70,
+        east_azimuth=90,
+    )
     battery = build_pylontech_battery(10)
     inverters = build_multiplus_inverters()
     evs = build_electric_vehicles(80)
@@ -176,6 +206,7 @@ def test_quick_setup_reads_saved_profile_back():
                 "host": "192.168.178.150",
                 "evcs_unit_ids": [40, 41],
                 "base_load_energy_key": BASE_LOAD_ENERGY_KEY,
+                "include_ac_coupled_pv": True,
             }
         },
         "pvforecast": {"planes": planes},
@@ -194,9 +225,13 @@ def test_quick_setup_reads_saved_profile_back():
     assert state["tilt"] == 25
     assert state["south_azimuth"] == 180
     assert state["north_azimuth"] == 0
-    assert state["plane_count"] == 4
-    assert state["total_peakpower"] == pytest.approx(21.79)
+    assert state["east_tilt"] == 70
+    assert state["east_azimuth"] == 90
+    assert state["plane_count"] == 5
+    assert state["total_peakpower"] == pytest.approx(22.66)
     assert state["profile_active"] is True
+    assert state["hoymiles_active"] is True
+    assert state["include_ac_coupled_pv"] is True
     assert state["battery_capacity_wh"] == 39552
     assert state["min_soc"] == 10
     assert state["battery_profile_active"] is True
