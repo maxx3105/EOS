@@ -17,9 +17,9 @@ from akkudoktoreos.utils.datetimeutil import DateTime, to_datetime, to_duration
 class LoadVictronHistoryCommonSettings(SettingsBaseModel):
     """Settings for the local Cerbo load-history forecast.
 
-    The provider intentionally does not assume fixed weekdays or departure times.  It learns a
+    The provider intentionally does not assume fixed weekdays or departure times. It learns a
     robust quarter-hour-of-day profile from the locally collected Cerbo load meter and gently
-    adapts that profile to the recent load level.  This is a better fit for rotating-shift
+    adapts that profile to the recent load level. This is a better fit for rotating-shift
     households than a fixed standard load profile.
     """
 
@@ -72,10 +72,10 @@ class LoadVictronHistoryCommonSettings(SettingsBaseModel):
 class LoadVictronHistory(LoadProvider):
     """Predict load from the cumulative local Cerbo load-energy measurement.
 
-    Forecast resolution is 15 minutes.  For each future slot, the provider uses a recency-weighted
-    median of the same local quarter-hour from previous days.  Median aggregation deliberately
+    Forecast resolution is 15 minutes. For each future slot, the provider uses a recency-weighted
+    median of the same local quarter-hour from previous days. Median aggregation deliberately
     suppresses occasional large controllable loads (for example EV charging) so they are less
-    likely to be learned as permanent base load.  Until enough days are available for a slot, the
+    likely to be learned as permanent base load. Until enough days are available for a slot, the
     recent median site load is used as a conservative fallback.
     """
 
@@ -84,6 +84,14 @@ class LoadVictronHistory(LoadProvider):
     @classmethod
     def provider_id(cls) -> str:
         return "LoadVictronHistory"
+
+    def enabled(self) -> bool:
+        """Enable automatically for a Victron installation unless another load provider is chosen."""
+        configured = self.config.load.provider
+        if configured == self.provider_id():
+            return True
+        adapter_providers = self.config.adapter.provider or []
+        return configured is None and "Victron" in adapter_providers
 
     @staticmethod
     def _weighted_median(values: np.ndarray, weights: np.ndarray) -> float:
@@ -139,7 +147,7 @@ class LoadVictronHistory(LoadProvider):
             starts.append(to_datetime(raw.index[0], in_timezone=self.config.general.timezone))
             ends.append(to_datetime(raw.index[-1], in_timezone=self.config.general.timezone))
 
-        # Use only the common meter window.  This also keeps the provider correct if more than one
+        # Use only the common meter window. This also keeps the provider correct if more than one
         # load meter is configured in the future.
         history_start = max(max(starts), reference.subtract(days=settings.history_days))
         history_end = min(ends)
@@ -174,8 +182,7 @@ class LoadVictronHistory(LoadProvider):
             periods=len(power_w),
             freq=f"{self._interval_minutes}min",
         )
-        series = pd.Series(power_w, index=index, dtype=float).dropna()
-        return series
+        return pd.Series(power_w, index=index, dtype=float).dropna()
 
     def _forecast_slot(self, history: pd.Series, target: DateTime, recent_median: float) -> float:
         """Forecast one quarter hour from historic matching clock-time samples."""
@@ -202,7 +209,12 @@ class LoadVictronHistory(LoadProvider):
         return max(0.0, float(forecast))
 
     async def _update_data(self, force_update: Optional[bool] = False) -> None:
-        """Build a 48-hour (configured horizon) 15-minute forecast from Cerbo history."""
+        """Build the configured horizon as a 15-minute forecast from Cerbo history."""
+        # Make the automatic selection visible in the live config, but never overwrite a provider
+        # explicitly chosen by the user.
+        if self.config.load.provider is None:
+            self.config.load.provider = self.provider_id()
+
         history = await self._history_power()
         if history.empty:
             # Do not publish a misleading zero forecast while history is still being collected.
