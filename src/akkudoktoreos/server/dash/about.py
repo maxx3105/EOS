@@ -8,9 +8,11 @@ from akkudoktoreos.core.coreabc import get_config
 from akkudoktoreos.core.version import __version__
 from akkudoktoreos.server.dash.markdown import Markdown
 from akkudoktoreos.server.dash.quicksetup import (
+    BASE_LOAD_ENERGY_KEY,
     EVCS_MAX_CURRENT_A,
     EVCS_MAX_POWER_W,
     EVCS_PROFILE_NAME,
+    EVCS_UNIT_IDS,
     EV_TARGET_SOC_PERCENT,
     PYLONTECH_CAPACITY_WH,
     PYLONTECH_PROFILE_NAME,
@@ -184,6 +186,8 @@ async function eosRunQuickSetup() {
             ["weather.provider", "OpenMeteo"],
             ["pvforecast.provider", "PVForecastPVLibVictron"],
             ["pvforecast.planes", planes],
+            ["load.provider", "LoadVictronHistory"],
+            ["measurement.load_emr_keys", ["victron_base_load_emr"]],
             ["adapter.provider", ["Victron"]],
             ["adapter.victron.host", cerboHost],
             ["adapter.victron.port", 502],
@@ -191,6 +195,10 @@ async function eosRunQuickSetup() {
             ["adapter.victron.timeout_sec", 3.0],
             ["adapter.victron.include_ac_coupled_pv", false],
             ["adapter.victron.pv_energy_key", "victron_pv_emr"],
+            ["adapter.victron.load_energy_key", "victron_load_emr"],
+            ["adapter.victron.base_load_energy_key", "victron_base_load_emr"],
+            ["adapter.victron.evcs_unit_ids", [40, 41]],
+            ["adapter.victron.evcs_energy_key_prefix", "victron_evcs"],
             ["adapter.victron.max_integration_gap_minutes", 15.0],
             ["devices.max_batteries", 1],
             ["devices.batteries", [battery]],
@@ -216,7 +224,7 @@ async function eosRunQuickSetup() {
             throw new Error("Die Werte wurden an EOS übertragen, aber das dauerhafte Schreiben nach /data/config/EOS.config.json konnte nicht bestätigt werden.");
         }
 
-        status.textContent = "✓ Dauerhaft gespeichert: PV + Batterie/Inselreserve + EV-Überschussziel. Die Seite wird neu geladen …";
+        status.textContent = "✓ Dauerhaft gespeichert: PV + Batterie/Inselreserve + EVCS-Grundlasttrennung + EV-Überschussziel. Die Seite wird neu geladen …";
         status.className = "mt-3 text-sm text-green-700 font-semibold";
         document.getElementById("eos-setup-next").style.display = "inline-block";
         setTimeout(() => window.location.reload(), 1200);
@@ -280,6 +288,7 @@ def QuickSetup() -> Div:
     profile_active = bool(state.get("profile_active"))
     battery_profile_active = bool(state.get("battery_profile_active"))
     ev_profile_active = bool(state.get("ev_profile_active"))
+    evcs_measurement_active = bool(state.get("evcs_measurement_active"))
     ev_target_soc = _display_value(state, "ev_target_soc", str(EV_TARGET_SOC_PERCENT))
 
     return Div(
@@ -288,7 +297,13 @@ def QuickSetup() -> Div:
         P("✓ Gespeicherte Cerbo-Konfiguration erkannt." if configured else "Noch keine Cerbo-Konfiguration gespeichert.", cls="text-sm mb-1 text-green-700 font-semibold" if configured else "text-sm mb-1 opacity-70"),
         P("✓ 4-MPPT-Profil aktiv (21,79 kWp)." if profile_active else "Das 4-MPPT-Profil wird beim nächsten Speichern angewendet.", cls="text-sm mb-1 text-green-700 font-semibold" if profile_active else "text-sm mb-1 opacity-70"),
         P("✓ Pylontech-/MultiPlus-Profil aktiv (39,552 kWh)." if battery_profile_active else "Das Batterie-/MultiPlus-Profil wird beim nächsten Speichern angewendet.", cls="text-sm mb-1 text-green-700 font-semibold" if battery_profile_active else "text-sm mb-1 opacity-70"),
-        P(f"✓ EV-Profil aktiv: PV-Überschuss bis {ev_target_soc} %, ohne feste Abfahrtszeit." if ev_profile_active else "Das EV-Profil wird beim nächsten Speichern angewendet.", cls="text-sm mb-4 text-green-700 font-semibold" if ev_profile_active else "text-sm mb-4 opacity-70"),
+        P(f"✓ EV-Profil aktiv: PV-Überschuss bis {ev_target_soc} %, ohne feste Abfahrtszeit." if ev_profile_active else "Das EV-Profil wird beim nächsten Speichern angewendet.", cls="text-sm mb-1 text-green-700 font-semibold" if ev_profile_active else "text-sm mb-1 opacity-70"),
+        P(
+            f"✓ EVCS-Messung aktiv: Modbus Unit IDs {EVCS_UNIT_IDS[0]} + {EVCS_UNIT_IDS[1]}, Grundlast ohne EV-Laden."
+            if evcs_measurement_active
+            else "Die EVCS-Grundlasttrennung wird beim nächsten Speichern aktiviert.",
+            cls="text-sm mb-4 text-green-700 font-semibold" if evcs_measurement_active else "text-sm mb-4 opacity-70",
+        ),
         Div(
             H2("1. Standort", cls="text-lg font-semibold mb-2"),
             Div(
@@ -300,7 +315,7 @@ def QuickSetup() -> Div:
         ),
         Div(
             H2("2. Cerbo GX", cls="text-lg font-semibold mb-2"),
-            _field("IP-Adresse oder Hostname", "eos-setup-cerbo", _display_value(state, "cerbo_host", "192.168.178.150"), help_text="Modbus TCP: Port 502, Unit ID 100, weiterhin read-only."),
+            _field("IP-Adresse oder Hostname", "eos-setup-cerbo", _display_value(state, "cerbo_host", "192.168.178.150"), help_text="Modbus TCP: Port 502, System Unit ID 100, weiterhin read-only."),
             P("System: 48 V · 3 × MultiPlus-II 48/10000/140-100 · PV vollständig DC-gekoppelt.", cls="text-sm opacity-80"),
             cls="border rounded-lg p-4 mb-4",
         ),
@@ -347,8 +362,9 @@ def QuickSetup() -> Div:
             H2("5. Elektrofahrzeuge & PV-Überschussladen", cls="text-lg font-semibold mb-2"),
             P(f"Ladeprofil: {EVCS_PROFILE_NAME}", cls="font-semibold mb-2"),
             Div(
-                P(f"EVCS 1 · 3-phasig · max. {EVCS_MAX_CURRENT_A} A · ca. {EVCS_MAX_POWER_W / 1000:.1f} kW"),
-                P(f"EVCS 2 · 3-phasig · max. {EVCS_MAX_CURRENT_A} A · ca. {EVCS_MAX_POWER_W / 1000:.1f} kW"),
+                P(f"EVCS A · Modbus Unit ID {EVCS_UNIT_IDS[0]} · 3-phasig · max. {EVCS_MAX_CURRENT_A} A · ca. {EVCS_MAX_POWER_W / 1000:.1f} kW"),
+                P(f"EVCS B · Modbus Unit ID {EVCS_UNIT_IDS[1]} · 3-phasig · max. {EVCS_MAX_CURRENT_A} A · ca. {EVCS_MAX_POWER_W / 1000:.1f} kW"),
+                P(f"Grundlast-Lernzähler: {BASE_LOAD_ENERGY_KEY} (Gesamtlast minus beide EVCS)"),
                 P(f"Renault R5 · vorhanden · {RENAULT_R5_CAPACITY_WH / 1000:.0f} kWh"),
                 P(f"Renault Megane E-Tech · vorgesehen · {RENAULT_MEGANE_CAPACITY_WH / 1000:.0f} kWh"),
                 P("Keine feste Abfahrtszeit: geeignet für wechselnden 4-Schicht-Betrieb.", cls="font-semibold mt-2"),
