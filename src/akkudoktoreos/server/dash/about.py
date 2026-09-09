@@ -8,9 +8,14 @@ from akkudoktoreos.core.coreabc import get_config
 from akkudoktoreos.core.version import __version__
 from akkudoktoreos.server.dash.markdown import Markdown
 from akkudoktoreos.server.dash.quicksetup import (
+    EVCS_MAX_CURRENT_A,
+    EVCS_MAX_POWER_W,
+    EVCS_PROFILE_NAME,
     PYLONTECH_CAPACITY_WH,
     PYLONTECH_PROFILE_NAME,
     PYLONTECH_USABLE_95_DOD_WH,
+    RENAULT_MEGANE_CAPACITY_WH,
+    RENAULT_R5_CAPACITY_WH,
     VICTRON_48V_PROFILE_NAME,
     quick_setup_state,
 )
@@ -112,6 +117,25 @@ function eosBuildMultiplusInverters() {
     }));
 }
 
+function eosBuildElectricVehicles() {
+    const chargeRates = [0.0, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0];
+    const vehicle = (deviceId, capacityWh) => ({
+        device_id: deviceId,
+        capacity_wh: capacityWh,
+        charging_efficiency: 1.0,
+        discharging_efficiency: 1.0,
+        max_charge_power_w: 11000,
+        min_charge_power_w: 4100,
+        charge_rates: chargeRates,
+        min_soc_percentage: 0,
+        max_soc_percentage: 100
+    });
+    return [
+        vehicle("renault-r5", 52000),
+        vehicle("renault-megane-e-tech", 60000)
+    ];
+}
+
 async function eosRunQuickSetup() {
     const status = document.getElementById("eos-setup-status");
     const button = document.getElementById("eos-setup-save");
@@ -143,6 +167,7 @@ async function eosRunQuickSetup() {
         const planes = eosBuildVictron48VPlanes(tilt, southAzimuth, northAzimuth);
         const battery = eosBuildPylontechBattery(minSoc);
         const inverters = eosBuildMultiplusInverters();
+        const electricVehicles = eosBuildElectricVehicles();
 
         const updates = [
             ["general.latitude", latitude],
@@ -164,7 +189,9 @@ async function eosRunQuickSetup() {
             ["devices.max_batteries", 1],
             ["devices.batteries", [battery]],
             ["devices.max_inverters", 3],
-            ["devices.inverters", inverters]
+            ["devices.inverters", inverters],
+            ["devices.max_electric_vehicles", 2],
+            ["devices.electric_vehicles", electricVehicles]
         ];
 
         for (const [key, value] of updates) {
@@ -183,7 +210,7 @@ async function eosRunQuickSetup() {
             throw new Error("Die Werte wurden an EOS übertragen, aber das dauerhafte Schreiben nach /data/config/EOS.config.json konnte nicht bestätigt werden.");
         }
 
-        status.textContent = "✓ Dauerhaft gespeichert: PV 21,79 kWp + Pylontech 39,552 kWh. Die Seite wird neu geladen …";
+        status.textContent = "✓ Dauerhaft gespeichert: PV + Batterie + 2 EV-Ladepunkte/Fahrzeuge. Die Seite wird neu geladen …";
         status.className = "mt-3 text-sm text-green-700 font-semibold";
         document.getElementById("eos-setup-next").style.display = "inline-block";
         setTimeout(() => window.location.reload(), 1200);
@@ -250,11 +277,12 @@ def QuickSetup() -> Div:
     configured = bool(state.get("configured"))
     profile_active = bool(state.get("profile_active"))
     battery_profile_active = bool(state.get("battery_profile_active"))
+    ev_profile_active = bool(state.get("ev_profile_active"))
 
     return Div(
         H2("Schnelleinrichtung: Synology + Victron Cerbo GX", cls="text-2xl font-bold mb-2"),
         P(
-            "Die Felder zeigen die aktuell in EOS gespeicherten Werte. PV, Batterie und die drei MultiPlus werden als Anlagenprofil verwaltet.",
+            "Die Felder zeigen die aktuell in EOS gespeicherten Werte. PV, Batterie, MultiPlus und EVs werden als Anlagenprofil verwaltet.",
             cls="mb-2",
         ),
         P(
@@ -267,7 +295,11 @@ def QuickSetup() -> Div:
         ),
         P(
             "✓ Pylontech-/MultiPlus-Profil aktiv (39,552 kWh)." if battery_profile_active else "Das Batterie-/MultiPlus-Profil wird beim nächsten Speichern angewendet.",
-            cls="text-sm mb-4 text-green-700 font-semibold" if battery_profile_active else "text-sm mb-4 opacity-70",
+            cls="text-sm mb-1 text-green-700 font-semibold" if battery_profile_active else "text-sm mb-1 opacity-70",
+        ),
+        P(
+            "✓ EV-Profil aktiv: R5 52 kWh + Megane E-Tech 60 kWh / 2 × 11 kW." if ev_profile_active else "Das EV-Profil wird beim nächsten Speichern angewendet.",
+            cls="text-sm mb-4 text-green-700 font-semibold" if ev_profile_active else "text-sm mb-4 opacity-70",
         ),
         Div(
             H2("1. Standort", cls="text-lg font-semibold mb-2"),
@@ -331,6 +363,23 @@ def QuickSetup() -> Div:
             P(
                 "EOS bleibt vorerst im Modus PREDICTION und schreibt keine ESS-Sollwerte. Die Batterieparameter werden nur für die spätere Simulation vorbereitet.",
                 cls="text-xs opacity-70",
+            ),
+            cls="border rounded-lg p-4 mb-4",
+        ),
+        Div(
+            H2("5. Elektrofahrzeuge & Ladepunkte", cls="text-lg font-semibold mb-2"),
+            P(f"Ladeprofil: {EVCS_PROFILE_NAME}", cls="font-semibold mb-2"),
+            Div(
+                P(f"EVCS 1 · 3-phasig · max. {EVCS_MAX_CURRENT_A} A · ca. {EVCS_MAX_POWER_W / 1000:.1f} kW"),
+                P(f"EVCS 2 · 3-phasig · max. {EVCS_MAX_CURRENT_A} A · ca. {EVCS_MAX_POWER_W / 1000:.1f} kW"),
+                P(f"Renault R5 · vorhanden · {RENAULT_R5_CAPACITY_WH / 1000:.0f} kWh"),
+                P(f"Renault Megane E-Tech · vorgesehen · {RENAULT_MEGANE_CAPACITY_WH / 1000:.0f} kWh"),
+                P("Maximal gleichzeitig modelliert: ca. 22 kW Ladeleistung.", cls="font-semibold mt-2"),
+                cls="border rounded p-3 text-sm space-y-1",
+            ),
+            P(
+                "Die Fahrzeuge werden zunächst nur für Prognose und spätere Optimierung hinterlegt. EOS steuert die Victron EV Charging Stations noch nicht und aktiviert kein V2G.",
+                cls="text-xs opacity-70 mt-2",
             ),
             cls="border rounded-lg p-4 mb-4",
         ),
