@@ -176,6 +176,8 @@ def build_quick_setup_updates(payload: dict[str, Any]) -> list[tuple[str, Any]]:
         ("weather/provider", "OpenMeteo"),
         ("pvforecast/provider", "PVForecastPVLibVictron"),
         ("pvforecast/planes", planes),
+        ("load/provider", "LoadVictronHistory"),
+        ("measurement/load_emr_keys", ["victron_load_emr"]),
         ("adapter/provider", ["Victron"]),
         ("adapter/victron/host", cerbo_host),
         ("adapter/victron/port", 502),
@@ -183,6 +185,7 @@ def build_quick_setup_updates(payload: dict[str, Any]) -> list[tuple[str, Any]]:
         ("adapter/victron/timeout_sec", 3.0),
         ("adapter/victron/include_ac_coupled_pv", False),
         ("adapter/victron/pv_energy_key", "victron_pv_emr"),
+        ("adapter/victron/load_energy_key", "victron_load_emr"),
         ("adapter/victron/max_integration_gap_minutes", 15.0),
         ("devices/max_batteries", 1),
         ("devices/batteries", [build_pylontech_battery(min_soc)]),
@@ -239,6 +242,9 @@ def quick_setup_state(config: dict[str, Any]) -> dict[str, Any]:
         and r5_target == megane_target
     )
 
+    load_provider = _nested(config, "load", "provider")
+    load_keys = _nested(config, "measurement", "load_emr_keys") or []
+
     return {
         "latitude": _nested(config, "general", "latitude"),
         "longitude": _nested(config, "general", "longitude"),
@@ -255,5 +261,9 @@ def quick_setup_state(config: dict[str, Any]) -> dict[str, Any]:
         "ev_count": len(valid_evs),
         "ev_target_soc": ev_target_soc,
         "ev_profile_active": ev_profile_active,
+        "load_provider": load_provider,
+        "load_forecast_active": (
+            load_provider == "LoadVictronHistory" and "victron_load_emr" in load_keys
+        ),
         "configured": bool(_nested(config, "adapter", "victron", "host")),
     }
