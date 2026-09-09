@@ -1,8 +1,12 @@
 """Regression tests for the local Victron Cerbo load-history forecast."""
 
 import numpy as np
+import pandas as pd
 
-from akkudoktoreos.prediction.loadvictronhistory import LoadVictronHistory
+from akkudoktoreos.prediction.loadvictronhistory import (
+    LoadVictronHistory,
+    LoadVictronHistoryCommonSettings,
+)
 from akkudoktoreos.utils.datetimeutil import to_datetime
 
 
@@ -37,3 +41,39 @@ def test_quarter_hour_alignment():
     assert LoadVictronHistory._ceil_interval(timestamp) == to_datetime(
         "2026-09-09T08:30:00+02:00"
     )
+
+
+def test_seasonal_distance_wraps_around_new_year():
+    history_index = pd.DatetimeIndex(
+        ["2025-12-31T08:00:00+01:00", "2026-01-15T08:00:00+01:00"]
+    )
+    target = pd.Timestamp("2026-01-01T08:00:00+01:00")
+
+    distance = LoadVictronHistory._circular_day_distance(history_index, target)
+
+    assert distance[0] == 1.0
+    assert distance[1] == 14.0
+
+
+def test_temperature_similarity_halves_every_four_degrees_and_keeps_missing_neutral():
+    temperatures = np.asarray([0.0, 4.0, 8.0, np.nan])
+
+    weights = LoadVictronHistory._temperature_similarity_weights(
+        temperatures,
+        target_temperature_c=0.0,
+        half_life_c=4.0,
+    )
+
+    np.testing.assert_allclose(weights, [1.0, 0.5, 0.25, 1.0])
+
+
+def test_seasonal_temperature_defaults_are_enabled_for_victron_history():
+    settings = LoadVictronHistoryCommonSettings()
+
+    assert settings.history_days == 90
+    assert settings.recency_half_life_days == 21.0
+    assert settings.seasonal_weighting is True
+    assert settings.seasonal_half_life_days == 45.0
+    assert settings.temperature_weighting is True
+    assert settings.temperature_half_life_c == 4.0
+    assert settings.temperature_history_key == "victron_outdoor_temp_c"
