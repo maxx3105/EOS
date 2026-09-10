@@ -127,15 +127,33 @@ class VictronAdapter(AdapterProvider):
 
     _EVCS_FIRST_REGISTER: ClassVar[int] = 3818
     _EVCS_REGISTER_COUNT: ClassVar[int] = 7  # 3818..3824
+    _TELEMETRY_KEYS: ClassVar[tuple[str, ...]] = (
+        "victron_pv_dc_power_w",
+        "victron_pv_ac_out_power_w",
+        "victron_pv_total_power_w",
+        "victron_site_load_power_w",
+        "victron_house_non_ev_power_w",
+        "victron_ev_power_w",
+        "victron_battery_power_w",
+        "victron_grid_power_w",
+    )
 
     connected: bool = Field(default=False)
     last_error: Optional[str] = Field(default=None)
+    # ``pv_power_w`` remains the backwards-compatible total PV value used by the
+    # existing forecast correction. The split fields expose the physical topology.
     pv_power_w: Optional[float] = Field(default=None)
+    pv_dc_power_w: Optional[float] = Field(default=None)
+    pv_ac_out_power_w: Optional[float] = Field(default=None)
+    pv_ac_input_power_w: Optional[float] = Field(default=None)
+    pv_ac_generator_power_w: Optional[float] = Field(default=None)
     grid_power_w: Optional[float] = Field(default=None)
     load_power_w: Optional[float] = Field(default=None)
     base_load_power_w: Optional[float] = Field(default=None)
+    house_non_ev_power_w: Optional[float] = Field(default=None)
     battery_power_w: Optional[float] = Field(default=None)
     battery_soc_percent: Optional[float] = Field(default=None)
+    ev_total_power_w: Optional[float] = Field(default=None)
     evcs_power_w: dict[int, float] = Field(default_factory=dict)
     evcs_current_a: dict[int, float] = Field(default_factory=dict)
     evcs_status: dict[int, int] = Field(default_factory=dict)
@@ -261,41 +279,85 @@ class VictronAdapter(AdapterProvider):
             )
         return list(struct.unpack(f">{count}H", pdu[2:]))
 
-    def _read_system_snapshot(self) -> dict[str, Optional[float]]:
-        """Read and decode known com.victronenergy.system register ranges."""
-        ac_system = self._read_holding_registers(808, 15)  # 808..822
-        battery = self._read_holding_registers(842, 2)  # 842..843
-        dc_pv = self._read_holding_registers(850, 1)  # 850
+    @classmethod
+    def _decode_system_registers(
+        cls,
+        ac_system: list[int],
+        battery: list[int],
+        dc_pv: list[int],
+        *,
+        include_ac_coupled_pv: bool,
+    ) -> dict[str, Optional[float]]:
+        """Decode the relevant ``com.victronenergy.system`` register blocks.
+
+        Register groups are kept explicit so the dashboard can distinguish the four
+        SmartSolar DC chargers from AC-coupled PV. For this installation AC-output PV
+        is the Hoymiles HMS-800W-2T exposed by Venus OS as a pvinverter at Position 1.
+        """
+        if len(ac_system) != 15 or len(battery) != 2 or len(dc_pv) != 1:
+            raise ValueError("Unexpected Victron system register block size")
 
         def ac_raw(register: int) -> int:
             return ac_system[register - 808]
 
-        ac_pv_values: list[Optional[float]] = []
-        if self.config.adapter.victron.include_ac_coupled_pv:
-            for register in range(808, 817):
-                value = self._decode_uint16(ac_raw(register))
-                ac_pv_values.append(float(value) if value is not None else None)
+        def ac_pv_group(first_register: int) -> Optional[float]:
+            return cls._sum_available(
+                [
+                    float(value) if value is not None else None
+                    for value in (
+                        cls._decode_uint16(ac_raw(first_register)),
+                        cls._decode_uint16(ac_raw(first_register + 1)),
+                        cls._decode_uint16(ac_raw(first_register + 2)),
+                    )
+                ],
+                clamp_nonnegative=True,
+            )
 
-        dc_pv_power = self._decode_uint16(dc_pv[0])
-        pv_values = ac_pv_values + [float(dc_pv_power) if dc_pv_power is not None else None]
-        pv_power = self._sum_available(pv_values, clamp_nonnegative=True)
+        pv_ac_out_power = ac_pv_group(808)
+        pv_ac_input_power = ac_pv_group(811)
+        pv_ac_generator_power = ac_pv_group(814)
+        dc_value = cls._decode_uint16(dc_pv[0])
+        pv_dc_power = float(dc_value) if dc_value is not None else None
 
-        load_power = self._sum_available(
-            [self._decode_int16(ac_raw(register)) for register in range(817, 820)]
+        pv_components: list[Optional[float]] = [pv_dc_power]
+        if include_ac_coupled_pv:
+            pv_components.extend(
+                [pv_ac_out_power, pv_ac_input_power, pv_ac_generator_power]
+            )
+        pv_power = cls._sum_available(pv_components, clamp_nonnegative=True)
+
+        load_power = cls._sum_available(
+            [cls._decode_int16(ac_raw(register)) for register in range(817, 820)]
         )
-        grid_power = self._sum_available(
-            [self._decode_int16(ac_raw(register)) for register in range(820, 823)]
+        grid_power = cls._sum_available(
+            [cls._decode_int16(ac_raw(register)) for register in range(820, 823)]
         )
-        battery_power = self._decode_int16(battery[0])
-        battery_soc = self._decode_uint16(battery[1])
+        battery_power = cls._decode_int16(battery[0])
+        battery_soc = cls._decode_uint16(battery[1])
 
         return {
             "pv_power_w": pv_power,
+            "pv_dc_power_w": pv_dc_power,
+            "pv_ac_out_power_w": pv_ac_out_power,
+            "pv_ac_input_power_w": pv_ac_input_power,
+            "pv_ac_generator_power_w": pv_ac_generator_power,
             "grid_power_w": grid_power,
             "load_power_w": load_power,
             "battery_power_w": float(battery_power) if battery_power is not None else None,
             "battery_soc_percent": float(battery_soc) if battery_soc is not None else None,
         }
+
+    def _read_system_snapshot(self) -> dict[str, Optional[float]]:
+        """Read and decode known com.victronenergy.system register ranges."""
+        ac_system = self._read_holding_registers(808, 15)  # 808..822
+        battery = self._read_holding_registers(842, 2)  # 842..843
+        dc_pv = self._read_holding_registers(850, 1)  # 850
+        return self._decode_system_registers(
+            ac_system,
+            battery,
+            dc_pv,
+            include_ac_coupled_pv=self.config.adapter.victron.include_ac_coupled_pv,
+        )
 
     @classmethod
     def _decode_evcs_registers(cls, registers: list[int]) -> dict[str, Optional[float]]:
@@ -360,6 +422,16 @@ class VictronAdapter(AdapterProvider):
             self.config.measurement.load_emr_keys = new_keys
         return desired
 
+    def _ensure_telemetry_measurement_keys(self) -> None:
+        """Keep all plant-dashboard telemetry keys writable after config migrations."""
+        current = list(self.config.measurement.telemetry_keys or [])
+        updated = list(current)
+        for key in self._TELEMETRY_KEYS:
+            if key not in updated:
+                updated.append(key)
+        if updated != current:
+            self.config.measurement.telemetry_keys = updated
+
     def _evcs_energy_key(self, unit_id: int) -> str:
         settings = self.config.adapter.victron
         return f"{settings.evcs_energy_key_prefix}_{unit_id}_emr"
@@ -384,6 +456,13 @@ class VictronAdapter(AdapterProvider):
         if key is None:
             return
         await self.measurement.update_value(sample_time, key, battery_soc_percent / 100.0)
+
+    async def _store_telemetry_value(
+        self, sample_time: DateTime, key: str, value: Optional[float]
+    ) -> None:
+        """Store one instantaneous read-only plant telemetry value when available."""
+        if value is not None:
+            await self.measurement.update_value(sample_time, key, float(value))
 
     async def _restore_integrated_energy(self, key: str) -> float:
         """Restore a locally integrated cumulative energy counter after a restart."""
@@ -454,18 +533,42 @@ class VictronAdapter(AdapterProvider):
                 raise ValueError("Cerbo GX returned no usable PV power value")
 
             self.pv_power_w = float(pv_power)
+            self.pv_dc_power_w = snapshot["pv_dc_power_w"]
+            self.pv_ac_out_power_w = snapshot["pv_ac_out_power_w"]
+            self.pv_ac_input_power_w = snapshot["pv_ac_input_power_w"]
+            self.pv_ac_generator_power_w = snapshot["pv_ac_generator_power_w"]
             self.grid_power_w = snapshot["grid_power_w"]
             self.load_power_w = snapshot["load_power_w"]
             self.battery_power_w = snapshot["battery_power_w"]
             self.battery_soc_percent = snapshot["battery_soc_percent"]
 
             self._ensure_load_forecast_measurement_key()
+            self._ensure_telemetry_measurement_keys()
             await self._store_pv_energy(sample_time, self.pv_power_w)
             if self.load_power_w is not None:
                 await self._store_site_load_energy(
                     sample_time, max(0.0, float(self.load_power_w))
                 )
             await self._store_battery_soc(sample_time, self.battery_soc_percent)
+
+            await self._store_telemetry_value(
+                sample_time, "victron_pv_dc_power_w", self.pv_dc_power_w
+            )
+            await self._store_telemetry_value(
+                sample_time, "victron_pv_ac_out_power_w", self.pv_ac_out_power_w
+            )
+            await self._store_telemetry_value(
+                sample_time, "victron_pv_total_power_w", self.pv_power_w
+            )
+            await self._store_telemetry_value(
+                sample_time, "victron_site_load_power_w", self.load_power_w
+            )
+            await self._store_telemetry_value(
+                sample_time, "victron_battery_power_w", self.battery_power_w
+            )
+            await self._store_telemetry_value(
+                sample_time, "victron_grid_power_w", self.grid_power_w
+            )
 
             evcs_power: dict[int, float] = {}
             evcs_current: dict[int, float] = {}
@@ -509,28 +612,50 @@ class VictronAdapter(AdapterProvider):
                         float(self.load_power_w), list(evcs_power.values())
                     )
                     self.base_load_power_w = base_load
+                    self.house_non_ev_power_w = base_load
+                    self.ev_total_power_w = float(sum(evcs_power.values()))
                     await self._store_base_load_energy(sample_time, base_load)
+                    await self._store_telemetry_value(
+                        sample_time, "victron_house_non_ev_power_w", base_load
+                    )
+                    await self._store_telemetry_value(
+                        sample_time, "victron_ev_power_w", self.ev_total_power_w
+                    )
                 else:
                     # Do not bridge over intervals with an unknown EV component; otherwise an EV
                     # session could leak back into the learned household base load.
                     self.base_load_power_w = None
+                    self.house_non_ev_power_w = None
+                    self.ev_total_power_w = None
                     self._break_energy_integration(base_energy_key)
             else:
                 self.base_load_power_w = (
                     max(0.0, float(self.load_power_w)) if self.load_power_w is not None else None
                 )
+                self.house_non_ev_power_w = self.base_load_power_w
+                self.ev_total_power_w = 0.0
+                await self._store_telemetry_value(
+                    sample_time, "victron_house_non_ev_power_w", self.house_non_ev_power_w
+                )
+                await self._store_telemetry_value(sample_time, "victron_ev_power_w", 0.0)
 
             self.connected = True
             self.last_error = None
             self.update_datetime = sample_time
-            ev_total = sum(evcs_power.values()) if unit_ids and not evcs_errors else None
+            ev_total = self.ev_total_power_w
             logger.info(
-                "Victron GX: PV={:.0f} W, grid={} W, load={} W, base={} W, EV={} W, "
-                "battery={} W, SoC={} %",
+                "Victron GX: PV={:.0f} W (DC={}, AC-out={}), grid={} W, load={} W, "
+                "house-no-EV={} W, EV={} W, battery={} W, SoC={} %",
                 self.pv_power_w,
+                f"{self.pv_dc_power_w:.0f}" if self.pv_dc_power_w is not None else "n/a",
+                f"{self.pv_ac_out_power_w:.0f}"
+                if self.pv_ac_out_power_w is not None
+                else "n/a",
                 f"{self.grid_power_w:.0f}" if self.grid_power_w is not None else "n/a",
                 f"{self.load_power_w:.0f}" if self.load_power_w is not None else "n/a",
-                f"{self.base_load_power_w:.0f}" if self.base_load_power_w is not None else "n/a",
+                f"{self.house_non_ev_power_w:.0f}"
+                if self.house_non_ev_power_w is not None
+                else "n/a",
                 f"{ev_total:.0f}" if ev_total is not None else ("n/a" if unit_ids else "0"),
                 f"{self.battery_power_w:.0f}" if self.battery_power_w is not None else "n/a",
                 f"{self.battery_soc_percent:.0f}" if self.battery_soc_percent is not None else "n/a",
