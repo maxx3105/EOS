@@ -32,6 +32,7 @@ from akkudoktoreos.server.dash.context import (
 )
 from akkudoktoreos.server.dash.footer import Footer
 from akkudoktoreos.server.dash.plan import Plan
+from akkudoktoreos.server.dash.plant import Plant
 from akkudoktoreos.server.dash.prediction import Prediction
 from akkudoktoreos.server.server import (
     drop_root_privileges,
@@ -280,6 +281,7 @@ def get_eosdash(request: Request):  # type: ignore
     root_path: str = request.scope.get("root_path", "")
 
     navigation = {
+        "Anlage": "/eosdash/plant",
         "Prediction": "/eosdash/prediction",
         "Config": "/eosdash/configuration",
         "Admin": "/eosdash/admin",
@@ -421,6 +423,12 @@ def post_eosdash_plan(request: Request, data: dict):  # type: ignore
     if _current_ems_mode() != "OPTIMIZATION":
         return _plan_unavailable()
     return Plan(*eos_server(), data)
+
+
+@app.get("/eosdash/plant")
+def get_eosdash_plant(request: Request, data: dict):  # type: ignore
+    """Serve the compact Victron plant and forecast overview."""
+    return Plant(*eos_server(), data)
 
 
 @app.get("/eosdash/prediction")
