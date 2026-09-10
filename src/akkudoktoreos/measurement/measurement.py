@@ -77,6 +77,26 @@ class MeasurementCommonSettings(SettingsBaseModel):
         },
     )
 
+    telemetry_keys: list[str] = Field(
+        default_factory=lambda: [
+            "victron_pv_dc_power_w",
+            "victron_pv_ac_out_power_w",
+            "victron_pv_total_power_w",
+            "victron_site_load_power_w",
+            "victron_house_non_ev_power_w",
+            "victron_ev_power_w",
+            "victron_battery_power_w",
+            "victron_grid_power_w",
+        ],
+        json_schema_extra={
+            "description": (
+                "Instantaneous local telemetry keys retained for the EOS plant dashboard. "
+                "These values are read-only observations written by local adapters."
+            ),
+            "examples": [["victron_pv_dc_power_w", "victron_grid_power_w"]],
+        },
+    )
+
     ## Computed fields
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -226,7 +246,7 @@ class Measurement(SingletonMixin, DataImportMixin, DataSequence):
 
         Returns:
             np.ndarray: A NumPy Array of the total load energy [kWh] per interval values calculated from
-                        the load meter readings.
+                        the meter readings.
         """
         if interval is None:
             interval = to_duration("1 hour")
