@@ -97,6 +97,23 @@ class MeasurementCommonSettings(SettingsBaseModel):
         },
     )
 
+    adapter_energy_keys: list[str] = Field(
+        default_factory=lambda: [
+            "victron_load_emr",
+            "victron_evcs_40_emr",
+            "victron_evcs_41_emr",
+        ],
+        json_schema_extra={
+            "description": (
+                "Auxiliary cumulative energy counters retained for local adapters but not summed "
+                "by Measurement.load_total_kwh(). The Victron quick setup keeps total site load "
+                "and the two EVCS counters here while load_emr_keys selects the EV-cleaned load "
+                "counter used for forecasting."
+            ),
+            "examples": [["victron_load_emr", "victron_evcs_40_emr", "victron_evcs_41_emr"]],
+        },
+    )
+
     ## Computed fields
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -246,7 +263,7 @@ class Measurement(SingletonMixin, DataImportMixin, DataSequence):
 
         Returns:
             np.ndarray: A NumPy Array of the total load energy [kWh] per interval values calculated from
-                        the meter readings.
+                        the load meter readings.
         """
         if interval is None:
             interval = to_duration("1 hour")
