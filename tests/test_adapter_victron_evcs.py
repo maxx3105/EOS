@@ -112,3 +112,20 @@ def test_measurement_defaults_keep_plant_dashboard_telemetry_writable():
         "victron_battery_power_w",
         "victron_grid_power_w",
     } <= set(settings.telemetry_keys)
+
+
+def test_victron_total_and_evcs_energy_counters_are_writable_but_not_load_sources():
+    settings = MeasurementCommonSettings(load_emr_keys=["victron_base_load_emr"])
+
+    assert {
+        "victron_load_emr",
+        "victron_evcs_40_emr",
+        "victron_evcs_41_emr",
+    } <= set(settings.adapter_energy_keys)
+    assert {
+        "victron_load_emr",
+        "victron_evcs_40_emr",
+        "victron_evcs_41_emr",
+        "victron_base_load_emr",
+    } <= set(settings.keys)
+    assert settings.load_emr_keys == ["victron_base_load_emr"]
