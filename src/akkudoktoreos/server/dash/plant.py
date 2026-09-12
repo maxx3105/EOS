@@ -26,6 +26,18 @@ GRID_POWER_KEY = "victron_grid_power_w"
 BATTERY_SOC_KEY = "battery1-soc-factor"
 ZERO_EXPORT_TOLERANCE_W = 50.0
 
+# Fixed high-contrast colors so series remain distinguishable in dark and light mode.
+COLOR_PV_DC = "#FFD166"
+COLOR_PV_AC_OUT = "#06D6A0"
+COLOR_PV_TOTAL = "#00B4D8"
+COLOR_PV_FORECAST = "#EF476F"
+COLOR_HOUSE = "#FF9F1C"
+COLOR_EV = "#E056FD"
+COLOR_BATTERY = "#4D96FF"
+COLOR_GRID = "#FF595E"
+COLOR_LOAD_FORECAST = "#F4A261"
+COLOR_SURPLUS = "#7AE582"
+
 
 def _format_power(value: Optional[float]) -> str:
     if value is None or pd.isna(value):
@@ -162,13 +174,31 @@ def _pv_chart(
     )
     if not dc.empty:
         data = _plot_index(dc)
-        plot.line(data.index, data.values, legend_label="SmartSolar DC", line_width=2)
+        plot.line(
+            data.index,
+            data.values,
+            legend_label="SmartSolar DC",
+            line_width=2,
+            line_color=COLOR_PV_DC,
+        )
     if not ac_out.empty:
         data = _plot_index(ac_out)
-        plot.line(data.index, data.values, legend_label="Hoymiles AC-out", line_width=2)
+        plot.line(
+            data.index,
+            data.values,
+            legend_label="Hoymiles AC-out",
+            line_width=2,
+            line_color=COLOR_PV_AC_OUT,
+        )
     if not total.empty:
         data = _plot_index(total)
-        plot.line(data.index, data.values, legend_label="PV gesamt Ist", line_width=3)
+        plot.line(
+            data.index,
+            data.values,
+            legend_label="PV gesamt Ist",
+            line_width=3,
+            line_color=COLOR_PV_TOTAL,
+        )
     if not pv_forecast.empty:
         data = _plot_index(pv_forecast)
         plot.line(
@@ -177,6 +207,7 @@ def _pv_chart(
             legend_label="PV gesamt Prognose",
             line_width=2,
             line_dash="dashed",
+            line_color=COLOR_PV_FORECAST,
         )
     plot.y_range.start = 0
     plot.legend.click_policy = "hide"
@@ -201,16 +232,22 @@ def _flow_chart(
         sizing_mode="stretch_width",
         height=360,
     )
-    for series, label in (
-        (house, "Hausverbrauch ohne EV"),
-        (ev, "EVCS gesamt"),
-        (battery, "Batterie (+ Laden / − Entladen)"),
-        (grid, "Netz (+ Bezug / − Einspeisung)"),
+    for series, label, color in (
+        (house, "Hausverbrauch ohne EV", COLOR_HOUSE),
+        (ev, "EVCS gesamt", COLOR_EV),
+        (battery, "Batterie (+ Laden / − Entladen)", COLOR_BATTERY),
+        (grid, "Netz (+ Bezug / − Einspeisung)", COLOR_GRID),
     ):
         if series.empty:
             continue
         data = _plot_index(series)
-        plot.line(data.index, data.values, legend_label=label, line_width=2)
+        plot.line(
+            data.index,
+            data.values,
+            legend_label=label,
+            line_width=2,
+            line_color=color,
+        )
     plot.line([pd.Timestamp.now().tz_localize(None)], [0], line_alpha=0)
     plot.legend.click_policy = "hide"
     plot.toolbar.autohide = True
@@ -233,15 +270,22 @@ def _forecast_chart(
         sizing_mode="stretch_width",
         height=360,
     )
-    for series, label, dash in (
-        (pv_forecast, "PV-Prognose", "solid"),
-        (load_forecast, "Hausverbrauch ohne EV – Prognose", "solid"),
-        (surplus, "PV-Rohüberschuss vor Batterie/EV", "dashed"),
+    for series, label, dash, color in (
+        (pv_forecast, "PV-Prognose", "solid", COLOR_PV_FORECAST),
+        (load_forecast, "Hausverbrauch ohne EV – Prognose", "solid", COLOR_LOAD_FORECAST),
+        (surplus, "PV-Rohüberschuss vor Batterie/EV", "dashed", COLOR_SURPLUS),
     ):
         if series.empty:
             continue
         data = _plot_index(series)
-        plot.line(data.index, data.values, legend_label=label, line_width=2, line_dash=dash)
+        plot.line(
+            data.index,
+            data.values,
+            legend_label=label,
+            line_width=2,
+            line_dash=dash,
+            line_color=color,
+        )
     plot.y_range.start = 0
     plot.legend.click_policy = "hide"
     plot.toolbar.autohide = True
@@ -316,9 +360,7 @@ def Plant(eos_host: str, eos_port: Union[str, int], data: Optional[dict] = None)
     ev = _latest(telemetry[EV_KEY])
     battery = _latest(telemetry[BATTERY_POWER_KEY])
     battery_soc_factor = _latest(telemetry[BATTERY_SOC_KEY])
-    battery_soc = (
-        battery_soc_factor * 100.0 if battery_soc_factor is not None else None
-    )
+    battery_soc = battery_soc_factor * 100.0 if battery_soc_factor is not None else None
     grid = _latest(telemetry[GRID_POWER_KEY])
     grid_value, grid_status, grid_warning = _grid_text(grid)
 
@@ -360,7 +402,9 @@ def Plant(eos_host: str, eos_port: Union[str, int], data: Optional[dict] = None)
         _stat_card(
             "Batterie",
             _battery_text(battery),
-            f"SOC {battery_soc:.0f} % · Inselreserve 15 %" if battery_soc is not None else "SOC – · Inselreserve 15 %",
+            f"SOC {battery_soc:.0f} % · Inselreserve 15 %"
+            if battery_soc is not None
+            else "SOC – · Inselreserve 15 %",
         ),
         _stat_card("Netz", grid_value, grid_status, warning=grid_warning),
     ]
@@ -385,7 +429,10 @@ def Plant(eos_host: str, eos_port: Union[str, int], data: Optional[dict] = None)
         )
 
     notice = (
-        P("Einige Reihen konnten nicht gelesen werden: " + " | ".join(warnings), cls="text-sm text-red-700")
+        P(
+            "Einige Reihen konnten nicht gelesen werden: " + " | ".join(warnings),
+            cls="text-sm text-red-700",
+        )
         if warnings
         else None
     )
